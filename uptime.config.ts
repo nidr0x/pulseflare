@@ -92,6 +92,15 @@ const workerConfig: WorkerConfig = {
       checkProxy: 'worker://weur',
       checkProxyFallback: true,
     },
+    {
+      id: 'personal_website',
+      name: 'nidr0x.win',
+      method: 'GET',
+      target: 'https://nidr0x.win',
+      statusPageLink: 'https://nidr0x.win',
+      checkProxy: 'worker://weur',
+      checkProxyFallback: true,
+    },
   ],
   // [Optional] Notification settings
   notification: {
