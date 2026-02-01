@@ -24,6 +24,8 @@ const workerConfig: WorkerConfig = {
       method: 'GET',
       target: 'https://dns.nidr0x.win',
       statusPageLink: 'https://dns.nidr0x.win',
+      checkProxy: 'worker://weur',
+      checkProxyFallback: true,
     },
     {
       id: 'freshrss',
@@ -35,6 +37,8 @@ const workerConfig: WorkerConfig = {
         'CF-Access-Client-Id': 'GITHUB_SECRET_CF_ACCESS_ID',
         'CF-Access-Client-Secret': 'GITHUB_SECRET_CF_ACCESS_SECRET',
       },
+      checkProxy: 'worker://weur',
+      checkProxyFallback: true,
     },
     {
       id: 'homeassistant',
@@ -46,6 +50,8 @@ const workerConfig: WorkerConfig = {
         'CF-Access-Client-Id': 'GITHUB_SECRET_CF_ACCESS_ID',
         'CF-Access-Client-Secret': 'GITHUB_SECRET_CF_ACCESS_SECRET',
       },
+      checkProxy: 'worker://weur',
+      checkProxyFallback: true,
     },
     {
       id: 'homebridge',
@@ -57,6 +63,8 @@ const workerConfig: WorkerConfig = {
         'CF-Access-Client-Id': 'GITHUB_SECRET_CF_ACCESS_ID',
         'CF-Access-Client-Secret': 'GITHUB_SECRET_CF_ACCESS_SECRET',
       },
+      checkProxy: 'worker://weur',
+      checkProxyFallback: true,
     },
     {
       id: 'teslamate',
@@ -68,6 +76,8 @@ const workerConfig: WorkerConfig = {
         'CF-Access-Client-Id': 'GITHUB_SECRET_CF_ACCESS_ID',
         'CF-Access-Client-Secret': 'GITHUB_SECRET_CF_ACCESS_SECRET',
       },
+      checkProxy: 'worker://weur',
+      checkProxyFallback: true,
     },
     {
       id: 'transmission',
@@ -79,6 +89,8 @@ const workerConfig: WorkerConfig = {
         'CF-Access-Client-Id': 'GITHUB_SECRET_CF_ACCESS_ID',
         'CF-Access-Client-Secret': 'GITHUB_SECRET_CF_ACCESS_SECRET',
       },
+      checkProxy: 'worker://weur',
+      checkProxyFallback: true,
     },
   ],
   // [Optional] Notification settings
