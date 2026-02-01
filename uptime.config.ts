@@ -13,6 +13,7 @@ const pageConfig: PageConfig = {
     { link: 'https://github.com/nidr0x', label: 'GitHub' },
     { link: 'mailto:me@nidr0x.win', label: 'Email me', highlight: true },
   ],
+  customFooter: '',
 }
 
 const workerConfig: WorkerConfig = {
