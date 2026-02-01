@@ -11,6 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: Inject Secrets into Config
+        run: |
+          sed -i "s/GITHUB_SECRET_CF_ACCESS_ID/${{ secrets.CF_ACCESS_CLIENT_ID }}/g" uptime.config.ts
+          sed -i "s/GITHUB_SECRET_CF_ACCESS_SECRET/${{ secrets.CF_ACCESS_CLIENT_SECRET }}/g" uptime.config.ts
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2.0.3
         with:

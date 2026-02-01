@@ -18,53 +18,73 @@ const pageConfig: PageConfig = {
 const workerConfig: WorkerConfig = {
   // Define all your monitors here
   monitors: [
-    // Example HTTP Monitor
     {
-      // `id` should be unique, history will be kept if the `id` remains constant
-      id: 'foo_monitor',
-      // `name` is used at status page and callback message
-      name: 'My API Monitor',
-      // `method` should be a valid HTTP Method
+      id: 'adguard_home',
+      name: 'AdGuard Home',
       method: 'GET',
-      // `target` is a valid URL
-      target: 'https://example.com',
-      // [OPTIONAL] `tooltip` is ONLY used at status page to show a tooltip
-      tooltip: 'This is a tooltip for this monitor',
-      // [OPTIONAL] `statusPageLink` is ONLY used for clickable link at status page
-      statusPageLink: 'https://example.com',
-      // [OPTIONAL] `expectedCodes` is an array of acceptable HTTP response codes, if not specified, default to 2xx
-      expectedCodes: [200],
-      // [OPTIONAL] `timeout` in millisecond, if not specified, default to 10000
-      timeout: 10000,
-      // [OPTIONAL] headers to be sent
-      headers: {
-        'User-Agent': 'Uptimeflare',
-        Authorization: 'Bearer YOUR_TOKEN_HERE',
-      },
-      // [OPTIONAL] body to be sent (require POST/PUT/PATCH method)
-      // body: 'Hello, world!',
-      // [OPTIONAL] if specified, the response must contains the keyword to be considered as operational.
-      // responseKeyword: 'success',
-      // [OPTIONAL] if specified, the response must NOT contains the keyword to be considered as operational.
-      // responseForbiddenKeyword: 'bad gateway',
-      // [OPTIONAL] if specified, will call the check proxy to check the monitor, mainly for geo-specific checks
-      // refer to docs https://github.com/lyc8503/UptimeFlare/wiki/Check-proxy-setup before setting this value
-      // currently supports `worker://`, `globalping://` and `http(s)://` proxies
-      // checkProxy: 'worker://weur',
-      // [OPTIONAL] if true, the check will fallback to local if the specified proxy is down
-      // checkProxyFallback: true,
+      target: 'https://dns.nidr0x.win',
+      tooltip: 'Network-wide ads & trackers blocking DNS server',
+      statusPageLink: 'https://dns.nidr0x.win',
     },
-    // Example TCP Monitor
     {
-      id: 'test_tcp_monitor',
-      name: 'Example TCP Monitor',
-      // `method` should be `TCP_PING` for tcp monitors
-      method: 'TCP_PING',
-      // `target` should be `host:port` for tcp monitors
-      target: '1.2.3.4:22',
-      tooltip: 'My production server SSH',
-      statusPageLink: 'https://example.com',
-      timeout: 5000,
+      id: 'freshrss',
+      name: 'FreshRSS',
+      method: 'GET',
+      target: 'https://rss.nidr0x.win/',
+      tooltip: 'Self-hosted RSS feed aggregator',
+      statusPageLink: 'https://rss.nidr0x.win',
+      headers: {
+        'CF-Access-Client-Id': 'GITHUB_SECRET_CF_ACCESS_ID',
+        'CF-Access-Client-Secret': 'GITHUB_SECRET_CF_ACCESS_SECRET',
+      },
+    },
+    {
+      id: 'homeassistant',
+      name: 'Home Assistant',
+      method: 'GET',
+      target: 'https://ha.nidr0x.win/',
+      tooltip: 'Open source home automation',
+      statusPageLink: 'https://ha.nidr0x.win',
+      headers: {
+        'CF-Access-Client-Id': 'GITHUB_SECRET_CF_ACCESS_ID',
+        'CF-Access-Client-Secret': 'GITHUB_SECRET_CF_ACCESS_SECRET',
+      },
+    },
+    {
+      id: 'homebridge',
+      name: 'Homebridge',
+      method: 'GET',
+      target: 'https://homebridge.nidr0x.win/',
+      tooltip: 'HomeKit support for the impatient',
+      statusPageLink: 'https://homebridge.nidr0x.win',
+      headers: {
+        'CF-Access-Client-Id': 'GITHUB_SECRET_CF_ACCESS_ID',
+        'CF-Access-Client-Secret': 'GITHUB_SECRET_CF_ACCESS_SECRET',
+      },
+    },
+    {
+      id: 'teslamate',
+      name: 'TeslaMate',
+      method: 'GET',
+      target: 'https://tesla.nidr0x.win/',
+      tooltip: 'A self-hosted Tesla data logger',
+      statusPageLink: 'https://tesla.nidr0x.win',
+      headers: {
+        'CF-Access-Client-Id': 'GITHUB_SECRET_CF_ACCESS_ID',
+        'CF-Access-Client-Secret': 'GITHUB_SECRET_CF_ACCESS_SECRET',
+      },
+    },
+    {
+      id: 'transmission',
+      name: 'Transmission',
+      method: 'GET',
+      target: 'https://transmission.nidr0x.win/',
+      tooltip: 'Fast, easy and free BitTorrent client',
+      statusPageLink: 'https://transmission.nidr0x.win',
+      headers: {
+        'CF-Access-Client-Id': 'GITHUB_SECRET_CF_ACCESS_ID',
+        'CF-Access-Client-Secret': 'GITHUB_SECRET_CF_ACCESS_SECRET',
+      },
     },
   ],
   // [Optional] Notification settings
@@ -114,16 +134,16 @@ const workerConfig: WorkerConfig = {
 const maintenances: MaintenanceConfig[] = [
   {
     // [Optional] Monitor IDs to be affected by this maintenance
-    monitors: ['foo_monitor', 'bar_monitor'],
+    monitors: ['adguard_home', 'homeassistant'],
     // [Optional] default to "Scheduled Maintenance" if not specified
-    title: 'Test Maintenance',
+    title: 'Maintenance Example',
     // Description of the maintenance, will be shown at status page
-    body: 'This is a test maintenance, server software upgrade',
+    body: 'This is a maintenance example for the new monitors',
     // Start time of the maintenance, in UNIX timestamp or ISO 8601 format
-    start: '2020-01-01T00:00:00+08:00',
+    start: '2024-01-01T00:00:00+00:00',
     // [Optional] end time of the maintenance, in UNIX timestamp or ISO 8601 format
     // if not specified, the maintenance will be considered as on-going
-    end: '2050-01-01T00:00:00+08:00',
+    end: '2024-01-01T01:00:00+00:00',
     // [Optional] color of the maintenance alert at status page, default to "yellow"
     color: 'blue',
   },
