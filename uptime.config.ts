@@ -10,9 +10,18 @@ const pageConfig: PageConfig = {
   title: 'nidr0x Homelab status page',
   // Links shown at the header of your status page, could set `highlight` to `true`
   links: [
-    { link: 'https://github.com/nidr0x', label: 'GitHub' },
     { link: 'mailto:me@nidr0x.win', label: 'Email me', highlight: true },
   ],
+  group: {
+    '🌐 Public': ['personal_website', 'adguard_home'],
+    '🔐 Private Homelab': [
+      'freshrss',
+      'homeassistant',
+      'homebridge',
+      'teslamate',
+      'transmission',
+    ],
+  },
   customFooter: '',
 }
 
