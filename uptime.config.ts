@@ -11,7 +11,7 @@ const pageConfig: PageConfig = {
   // Links shown at the header of your status page, could set `highlight` to `true`
   links: [
     { link: 'https://github.com/nidr0x', label: 'GitHub' },
-    { link: 'mailto:nidr0x@gmail.com', label: 'Email me', highlight: true },
+    { link: 'mailto:me@nidr0x.win', label: 'Email me', highlight: true },
   ],
 }
 
@@ -23,7 +23,6 @@ const workerConfig: WorkerConfig = {
       name: 'AdGuard Home',
       method: 'GET',
       target: 'https://dns.nidr0x.win',
-      tooltip: 'Network-wide ads & trackers blocking DNS server',
       statusPageLink: 'https://dns.nidr0x.win',
     },
     {
@@ -31,7 +30,6 @@ const workerConfig: WorkerConfig = {
       name: 'FreshRSS',
       method: 'GET',
       target: 'https://rss.nidr0x.win/',
-      tooltip: 'Self-hosted RSS feed aggregator',
       statusPageLink: 'https://rss.nidr0x.win',
       headers: {
         'CF-Access-Client-Id': 'GITHUB_SECRET_CF_ACCESS_ID',
@@ -43,7 +41,6 @@ const workerConfig: WorkerConfig = {
       name: 'Home Assistant',
       method: 'GET',
       target: 'https://ha.nidr0x.win/',
-      tooltip: 'Open source home automation',
       statusPageLink: 'https://ha.nidr0x.win',
       headers: {
         'CF-Access-Client-Id': 'GITHUB_SECRET_CF_ACCESS_ID',
@@ -55,7 +52,6 @@ const workerConfig: WorkerConfig = {
       name: 'Homebridge',
       method: 'GET',
       target: 'https://homebridge.nidr0x.win/',
-      tooltip: 'HomeKit support for the impatient',
       statusPageLink: 'https://homebridge.nidr0x.win',
       headers: {
         'CF-Access-Client-Id': 'GITHUB_SECRET_CF_ACCESS_ID',
@@ -67,7 +63,6 @@ const workerConfig: WorkerConfig = {
       name: 'TeslaMate',
       method: 'GET',
       target: 'https://tesla.nidr0x.win/',
-      tooltip: 'A self-hosted Tesla data logger',
       statusPageLink: 'https://tesla.nidr0x.win',
       headers: {
         'CF-Access-Client-Id': 'GITHUB_SECRET_CF_ACCESS_ID',
@@ -79,7 +74,6 @@ const workerConfig: WorkerConfig = {
       name: 'Transmission',
       method: 'GET',
       target: 'https://transmission.nidr0x.win/',
-      tooltip: 'Fast, easy and free BitTorrent client',
       statusPageLink: 'https://transmission.nidr0x.win',
       headers: {
         'CF-Access-Client-Id': 'GITHUB_SECRET_CF_ACCESS_ID',
@@ -129,25 +123,7 @@ const workerConfig: WorkerConfig = {
 // Also, related downtime notifications will be skipped (if any)
 // Of course, you can leave it empty if you don't need this feature
 
-// const maintenances: MaintenanceConfig[] = []
-
-const maintenances: MaintenanceConfig[] = [
-  {
-    // [Optional] Monitor IDs to be affected by this maintenance
-    monitors: ['adguard_home', 'homeassistant'],
-    // [Optional] default to "Scheduled Maintenance" if not specified
-    title: 'Maintenance Example',
-    // Description of the maintenance, will be shown at status page
-    body: 'This is a maintenance example for the new monitors',
-    // Start time of the maintenance, in UNIX timestamp or ISO 8601 format
-    start: '2024-01-01T00:00:00+00:00',
-    // [Optional] end time of the maintenance, in UNIX timestamp or ISO 8601 format
-    // if not specified, the maintenance will be considered as on-going
-    end: '2024-01-01T01:00:00+00:00',
-    // [Optional] color of the maintenance alert at status page, default to "yellow"
-    color: 'blue',
-  },
-]
+const maintenances: MaintenanceConfig[] = []
 
 // Don't edit this line
 export { maintenances, pageConfig, workerConfig }
