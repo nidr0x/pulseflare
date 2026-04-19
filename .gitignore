@@ -2,15 +2,28 @@
 
 # dependencies
 /node_modules
+apps/*/node_modules
+packages/*/node_modules
 /.pnp
 .pnp.js
 
 # testing
 /coverage
 
-# next.js
+# legacy framework caches
 /.next/
 /out/
+
+# workspace build outputs
+/dist
+apps/*/dist
+packages/*/dist
+apps/*/.vite
+packages/*/.vite
+apps/*/.wrangler
+packages/*/.tsbuildinfo
+apps/*/.tsbuildinfo
+config/dist
 
 # production
 /build

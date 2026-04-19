@@ -1,0 +1,18 @@
+{
+  "name": "@pulseflare/worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --config wrangler.toml",
+    "build": "tsc -p tsconfig.json --pretty false",
+    "test": "vitest run src/index.test.ts src/routes/public.test.ts src/routes/bootstrap.test.ts src/repositories/d1.test.ts",
+    "lint": "tsc -p tsconfig.json --pretty false"
+  },
+  "dependencies": {
+    "@pulseflare/core": "file:../../packages/core",
+    "@pulseflare/schema": "file:../../packages/schema"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.4"
+  }
+}

@@ -1,88 +1,191 @@
-<div align="right">
-  <a title="English" href="README.md"><img src="https://img.shields.io/badge/-English-A31F34?style=for-the-badge" alt="English" /></a>
-  <a title="简体中文" href="README_zh-CN.md"><img src="https://img.shields.io/badge/-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-545759?style=for-the-badge" alt="简体中文"></a>
-</div>
+# Pulseflare
 
-# ✔[UptimeFlare](https://github.com/lyc8503/UptimeFlare)
+Open-source uptime monitoring and public status pages on Cloudflare, with a setup flow closer to the original UptimeFlare experience:
 
-A more advanced, serverless, and free uptime monitoring & status page solution, powered by Cloudflare Workers, complete with a user-friendly interface.
+1. Use this repo as a template
+2. add two Cloudflare secrets in GitHub
+3. edit one config file
+4. push to `main`
+5. GitHub Actions deploys the Worker and public status page
 
-🎉 **[UPDATE 2026/01/03]** I have just migrated UptimeFlare from KV to D1 Database. I also updated the Terraform Cloudflare provider to v5 and improved the deployment process. The data structure has been optimized to resolve long-standing performance issues.
+For normal installs, end users do not need local Wrangler, Terraform, or manual SQL steps.
 
-New users can deploy directly, while existing users can have a simple auto migration process (upgrade docs below)! Feel free to open an issue if you run into any trouble deploying.
+## What It Looks Like
 
-## ⭐Features
+Pulseflare now defaults to a simpler public status layout inspired by uptime tools like UptimeRobot and Cronitor:
 
-- Open-source, easy to deploy (in under 10 minutes, no local tools required), and free
-- Monitoring capabilities
-  - Up to 50 checks at 1-minute intervals
-  - Geo-specific checks from over [310 cities](https://www.cloudflare.com/network/) worldwide
-  - Support for HTTP/HTTPS/TCP port monitoring
-  - Up to 90-day uptime history and uptime percentage tracking
-  - Customizable request methods, headers, and body for HTTP(s)
-  - Custom status code & keyword checks for HTTP(s)
-  - Downtime notification supporting [100+ notification channels](https://github.com/caronc/apprise/wiki)
-  - Customizable Webhook
-  - Multi-language support (English/Chinese)
-- Status page
-  - Interactive ping (response time) chart for all types of monitors
-  - Scheduled maintenances alerts & Incident history page
-  - Responsive UI that adapts to your system theme
-  - Customizable status page
-  - Use your own domain with CNAME
-  - Optional password authentication (private status page)
-  - JSON API for fetching realtime status data
+- one centered overall status
+- stacked service rows
+- compact 90-day uptime bars
+- incident history below the live status section
 
-## 👀Demo
+![Pulseflare public status page](docs/screenshots/public-status-page.png)
 
-My status page (Online demo): https://uptimeflare.pages.dev/
+## Quickstart
 
-Some screenshots:
+### 1. Use this template
 
-![Desktop, Light theme](docs/desktop.png)
+Create your own repository from this project.
 
-## ⚡Quickstart / 📄Documentation
+### 2. Create a Cloudflare API token
 
-Please refer to [Wiki](https://github.com/lyc8503/UptimeFlare/wiki)
+Create an API token in Cloudflare with permission to deploy Workers and manage D1.
 
-## 🚀Upgrade existing deployments
+In practice, give it:
 
-Get the latest features right away with [simple upgrade process](https://github.com/lyc8503/UptimeFlare/wiki/Synchronize-updates-from-upstream)
+- `Cloudflare Workers:Edit`
+- `D1:Edit`
 
-## ⚙️Docs for developer
+You also need your Cloudflare account ID.
 
-To contribute new features or customize your deployment furthermore, see [here](https://github.com/lyc8503/UptimeFlare/wiki/How-to-develop).
+### 3. Add GitHub secrets
 
-## New features (TODOs)
+In your GitHub repo, add:
 
-- [x] Specify region for monitors
-- [x] TCP `opened` promise
-- [x] Use apprise to support various notification channels
-- [x] ~~Telegram example~~
-- [x] ~~[Bark](https://bark.day.app) example~~
-- [x] ~~Email notification via Cloudflare Email Workers~~
-- [x] Improve docs by providing simple examples
-- [x] Notification grace period
-- [ ] SSL certificate checks
-- [x] ~~Self-host Dockerfile~~
-- [x] Incident history
-- [x] Improve `checkLocationWorkerRoute` and fix possible `proxy failed`
-- [x] Groups
-- [x] Remove old incidents
-- [x] ~~Known issue~~: `fetch` doesn't support non-standard port (resolved after CF update)
-- [x] Compatibility date update
-- [x] Scheduled Maintenance
-- [x] Add docs for dev
-- [x] Migration to Terraform Cloudflare provider version 5.x
-- [x] Cloudflare D1 database
-- [x] Scheduled maintenances (via IIFE)
-- [x] Simpler config example
-- [x] Upcoming maintenances
-- [x] Universal Webhook upgrade
-- [x] i18n...? (maybe)
-- [ ] ICMP via proxy?
-- [x] Add default UA
-- [x] Customizable footer
-- [x] New header logo
-- [x] Improve CPU time usage
-- [x] Local deployment (docs WIP)
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+
+Optional GitHub repository variables:
+
+- `PULSEFLARE_WORKER_NAME`
+- `PULSEFLARE_D1_NAME`
+
+If you do not set those variables, the workflow falls back to:
+
+- Worker name: `pulseflare-status`
+- D1 name: `pulseflare-d1`
+
+### 4. Edit the config
+
+Update [`config/pulse.config.ts`](config/pulse.config.ts) with your product name, services, maintenance windows, and notification settings.
+
+### 5. Push to `main`
+
+The deploy workflow at [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml):
+
+- installs dependencies
+- runs tests, build, and lint
+- finds or creates the D1 database
+- applies D1 migrations
+- deploys one Worker that serves both:
+  - the public status site
+  - the `/api/*` routes
+
+That means the default install is now one Cloudflare project, not a separate Worker plus Pages setup.
+
+## Cost
+
+As of April 19, 2026, the Cloudflare pricing relevant to Pulseflare is:
+
+- Workers Free: `100,000` requests per day, with `10 ms` CPU time per invocation included. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)
+- Workers Static Assets: static asset requests are `free and unlimited`. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/) and [Static assets best practices](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/)
+- D1 Free: `5 million` rows read per day, `100,000` rows written per day, and `5 GB` total storage. [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/)
+- Workers Paid: minimum `$5/month`, with `10 million` included requests per month, then `$0.30` per additional million requests. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)
+
+Expected cost:
+
+- In most hobby, personal, and small-team installs, the free tier should be enough.
+- That is the target cost profile for this project, and it should stay close to what UptimeFlare users expect.
+- This is still an estimate, not a guarantee, because your real cost depends on monitor count, check frequency, public traffic, and D1 query patterns.
+
+One helpful detail: the public status page is served as Worker static assets, while the Worker itself only runs first for `/api/*`. That keeps the public page on the cheaper static-asset path instead of counting every page hit as a Worker invocation.
+
+## Current Scope
+
+Already in the repo:
+
+- checked-in config schema in [`config/pulse.config.ts`](config/pulse.config.ts)
+- Worker routes
+- D1 migrations
+- public summary API
+- public status UI bundled into the Worker deploy path
+- GitHub Actions deployment flow
+
+Still in progress:
+
+- real scheduled checks from config
+- persistence-backed incidents and maintenance endpoints
+- live notification delivery from state changes
+
+## Config Example
+
+```ts
+import { defineStatusConfig } from '@pulseflare/schema'
+
+export default defineStatusConfig({
+  site: {
+    name: 'Acme Status',
+    description: 'System health and incident reporting',
+    url: 'https://status.acme.dev',
+    brand: {
+      logo: '/brand/logo.svg',
+      icon: '/brand/icon.svg',
+    },
+    navigation: [
+      { label: 'Docs', href: 'https://acme.dev/docs' },
+      { label: 'Support', href: 'https://acme.dev/support' },
+    ],
+  },
+  services: [
+    {
+      id: 'api',
+      name: 'Public API',
+      group: 'Core Platform',
+      checks: [
+        {
+          type: 'http',
+          url: 'https://api.acme.dev/health',
+          method: 'GET',
+          expect: {
+            status: [200],
+            bodyIncludes: ['ok'],
+          },
+        },
+      ],
+    },
+  ],
+  notifications: {
+    gracePeriodMinutes: 5,
+    providers: [],
+  },
+  maintenances: [],
+})
+```
+
+More detail:
+
+- [docs/configuration.md](docs/configuration.md)
+- [docs/architecture.md](docs/architecture.md)
+
+## Local Development
+
+Local tooling is for contributors:
+
+```bash
+npm install
+npm run test
+npm run build
+npm run lint
+```
+
+For local Worker work:
+
+```bash
+npm run dev:worker
+```
+
+For local UI work:
+
+```bash
+npm run dev:web
+```
+
+## Contributing
+
+Contributions are welcome, especially around:
+
+- check execution
+- incident persistence
+- notification providers
+- config ergonomics
+- status-page polish

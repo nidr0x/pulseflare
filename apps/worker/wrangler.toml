@@ -1,0 +1,16 @@
+# Authoritative Pulseflare worker config.
+name = "pulseflare-worker"
+main = "src/index.ts"
+compatibility_date = "2026-04-18"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "../web/dist"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "PULSEFLARE_D1"
+database_name = "pulseflare_d1"
+database_id = "00000000-0000-0000-0000-000000000000"
