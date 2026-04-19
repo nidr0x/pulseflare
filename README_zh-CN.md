@@ -3,39 +3,15 @@
   <a title="简体中文" href="README_zh-CN.md"><img src="https://img.shields.io/badge/-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-A31F34?style=for-the-badge" alt="简体中文"></a>
 </div>
 
-# ✔[UptimeFlare](https://github.com/lyc8503/UptimeFlare)
+# Pulseflare
 
-一个由 Cloudflare Workers 驱动的功能丰富、Serverless 且免费的 Uptime 监控及状态页面。
+Pulseflare 是一个基于 Cloudflare 的可编排可配置可公开展示的状态页与可用性监控产品。
 
-## ⭐功能
+主文档目前以英文版为准，请先阅读 [README.md](README.md)。
 
-- 开源，易于部署（全程无需本地工具，耗时不到 10 分钟），且完全免费
-- 监控功能
-  - 最多支持 50 个 1 分钟精度的检查
-  - 支持指定全球 [310+ 个城市](https://www.cloudflare.com/network/) 的监控节点
-  - 支持 HTTP/HTTPS/TCP 端口监控
-  - 最多 90 天的 uptime 历史记录和 uptime 百分比跟踪
-  - 可自定义的 HTTP(s) 请求方法、头和主体
-  - 可自定义的 HTTP(s) 状态码和关键字检查
-  - 支持 [100 多个通知渠道](https://github.com/caronc/apprise/wiki) 的宕机消息通知
-  - 可自定义的 Webhook
-  - 多语言支持 (中文/英文)
-- 状态页面
-  - 所有类型监控的交互式 ping（响应时间）图表
-  - 响应式 UI，自适应PC/手机屏幕，及亮色/暗色系统主题
-  - 配置选项丰富的状态页面
-  - 可使用您自己的域名与 CNAME
-  - 可选的密码认证（私人状态页面）
-  - 用于获取实时状态数据的 JSON API
+后续会补充完整的中文文档，包括：
 
-## 👀演示
-
-我自己的状态页面（在线演示）：https://uptimeflare.pages.dev/
-
-一些截图：
-
-![桌面，浅色主题](docs/desktop.png)
-
-## ⚡快速入门 / 📄文档
-
-请参阅 [Wiki](https://github.com/lyc8503/UptimeFlare/wiki)
+- 产品定位与能力概览
+- 架构说明
+- 配置指南
+- 部署与贡献说明

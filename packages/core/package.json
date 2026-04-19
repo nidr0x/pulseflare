@@ -1,0 +1,23 @@
+{
+  "name": "@pulseflare/core",
+  "private": true,
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc --build tsconfig.json --force --pretty false",
+    "test": "vitest run src/status-summary.test.ts",
+    "lint": "tsc -p tsconfig.json --pretty false"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.4"
+  }
+}
