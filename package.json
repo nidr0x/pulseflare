@@ -14,11 +14,11 @@
     "dev:worker": "npm run dev --workspace @pulseflare/worker"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250410.0",
-    "@types/node": "^20",
+    "@cloudflare/workers-types": "^4.20260426.1",
+    "@types/node": "^25",
     "@types/react": "^18",
     "@types/react-dom": "^18",
-    "typescript": "^5",
-    "wrangler": "^4.54.0"
+    "typescript": "^6",
+    "wrangler": "^4.85.0"
   }
 }
