@@ -1,0 +1,14 @@
+{
+  "name": "@pulseflare/schema",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --pretty false",
+    "test": "vitest run src/config.test.ts",
+    "lint": "tsc -p ../../config/tsconfig.json --pretty false"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.5"
+  }
+}

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 96" role="img" aria-labelledby="title">
+  <title>Pulseflare logo</title>
+  <rect width="96" height="96" rx="24" fill="#111827" />
+  <path
+    d="M14 57h13l10-21 14 39 15-29h16"
+    fill="none"
+    stroke="#fb7185"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="10"
+  />
+  <text
+    x="124"
+    y="60"
+    fill="#111827"
+    font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+    font-size="42"
+    font-weight="700"
+  >
+    Pulseflare
+  </text>
+</svg>

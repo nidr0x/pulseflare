@@ -1,0 +1,24 @@
+{
+  "name": "pulseflare",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @pulseflare/web && npx tsc -b tsconfig.json --force --pretty false",
+    "test": "npm run test --workspaces && node --test .github/scripts/resolve-cloudflare-resources.test.mjs",
+    "lint": "npm run lint --workspaces",
+    "dev:web": "npm run dev --workspace @pulseflare/web",
+    "dev:worker": "npm run dev --workspace @pulseflare/worker"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260426.1",
+    "@types/node": "^25",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^6",
+    "wrangler": "^4.85.0"
+  }
+}
