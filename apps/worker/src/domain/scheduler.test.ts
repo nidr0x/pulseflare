@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { runScheduledChecks } from './scheduler'
 import * as checkRunnerModule from './check-runner'
@@ -15,6 +15,7 @@ type StatusRow = {
   current_status: 'up' | 'down'
   latest_reason: string | null
   checked_at: string
+  failing_since?: string | null
 }
 
 type IncidentRow = {
@@ -66,23 +67,26 @@ function createFakeDatabase(initial?: {
               }
 
               if (query.includes('INSERT INTO service_status') && query.includes('ON CONFLICT(service_id)')) {
-                const [serviceId, status, latestReason, checkedAt] = args as [
+                const [serviceId, status, latestReason, checkedAt, failingSince] = args as [
                   string,
                   'up' | 'down',
                   string | null,
                   string,
+                  string | null,
                 ]
                 const row = state.statuses.find((entry) => entry.service_id === serviceId)
                 if (row) {
                   row.current_status = status
                   row.latest_reason = latestReason
                   row.checked_at = checkedAt
+                  row.failing_since = failingSince
                 } else {
                   state.statuses.push({
                     service_id: serviceId,
                     current_status: status,
                     latest_reason: latestReason,
                     checked_at: checkedAt,
+                    failing_since: failingSince,
                   })
                 }
                 return
@@ -141,6 +145,19 @@ function createFakeDatabase(initial?: {
                   : null
               }
 
+              if (query.includes('FROM service_status') && query.includes('failing_since')) {
+                const [serviceId] = args as [string]
+                const row = state.statuses.find((entry) => entry.service_id === serviceId)
+
+                return row
+                  ? {
+                      current_status: row.current_status,
+                      checked_at: row.checked_at,
+                      failing_since: row.failing_since ?? null,
+                    }
+                  : null
+              }
+
               return null
             },
           }
@@ -153,6 +170,10 @@ function createFakeDatabase(initial?: {
 }
 
 describe('runScheduledChecks', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('runs configured HTTP checks and persists service status plus latency', async () => {
     const { database, state } = createFakeDatabase()
     const fetcher = vi.fn(async () => new Response('ok', { status: 200 }))
@@ -189,6 +210,7 @@ describe('runScheduledChecks', () => {
         current_status: 'up',
         latest_reason: 'GET https://api.example.com/health -> 200',
         checked_at: '2026-04-25T08:00:00.000Z',
+        failing_since: null,
       },
     ])
     expect(state.latencyWrites).toHaveLength(1)
@@ -285,11 +307,88 @@ describe('runScheduledChecks', () => {
     })
     expect(runnerSpy).toHaveBeenCalledWith(
       { type: 'tcp', target: 'redis.example.com:6379' },
-      expect.any(Function)
+      expect.any(Function),
+      undefined,
+      undefined
     )
     expect(state.statuses[0]).toMatchObject({
       service_id: 'redis',
       current_status: 'up',
     })
+  })
+
+  it('waits for the grace period before opening an incident or sending notifications', async () => {
+    const { database, state } = createFakeDatabase()
+    const notifyFetcher = vi.fn(async () => new Response(null, { status: 202 }))
+
+    const env = {
+      PULSEFLARE_D1: database,
+      STATUS_CONFIG: {
+        site: { name: 'Pulseflare' },
+        services: [
+          {
+            id: 'api',
+            name: 'API',
+            checks: [{ type: 'http', url: 'https://api.example.com/health' }],
+          },
+        ],
+        notifications: {
+          gracePeriodMinutes: 5,
+          providers: [{ id: 'ops', type: 'webhook', url: 'https://hooks.example.com/pulseflare' }],
+        },
+        maintenances: [],
+      },
+    }
+
+    await runScheduledChecks(env, async () => new Response('down', { status: 503 }), '2026-04-25T08:00:00.000Z', notifyFetcher)
+
+    expect(state.incidents).toHaveLength(0)
+    expect(notifyFetcher).not.toHaveBeenCalled()
+
+    await runScheduledChecks(env, async () => new Response('down', { status: 503 }), '2026-04-25T08:06:00.000Z', notifyFetcher)
+
+    expect(state.incidents).toHaveLength(1)
+    expect(state.incidents[0]).toMatchObject({
+      service_id: 'api',
+      status: 'open',
+    })
+    expect(notifyFetcher).toHaveBeenCalledTimes(1)
+  })
+
+  it('suppresses notifications while the affected service is under active maintenance', async () => {
+    const { database, state } = createFakeDatabase()
+    const notifyFetcher = vi.fn(async () => new Response(null, { status: 202 }))
+
+    const env = {
+      PULSEFLARE_D1: database,
+      STATUS_CONFIG: {
+        site: { name: 'Pulseflare' },
+        services: [
+          {
+            id: 'api',
+            name: 'API',
+            checks: [{ type: 'http', url: 'https://api.example.com/health' }],
+          },
+        ],
+        notifications: {
+          providers: [{ id: 'ops', type: 'webhook', url: 'https://hooks.example.com/pulseflare' }],
+        },
+        maintenances: [
+          {
+            id: 'active-maintenance',
+            title: 'API maintenance',
+            body: 'Working on the API.',
+            start: '2026-04-25T07:30:00.000Z',
+            end: '2026-04-25T09:00:00.000Z',
+            services: ['api'],
+          },
+        ],
+      },
+    }
+
+    await runScheduledChecks(env, async () => new Response('down', { status: 503 }), '2026-04-25T08:06:00.000Z', notifyFetcher)
+
+    expect(state.incidents).toHaveLength(1)
+    expect(notifyFetcher).not.toHaveBeenCalled()
   })
 })

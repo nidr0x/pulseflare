@@ -63,6 +63,7 @@ Optional GitHub repository variables:
 - `PULSEFLARE_WORKER_NAME`
 - `PULSEFLARE_D1_NAME`
 - `PULSEFLARE_CHECK_CRON`
+- `PULSEFLARE_REMOTE_PROBE_URL`
 
 Defaults:
 
@@ -70,6 +71,7 @@ Defaults:
 - Worker name: `pulseflare-status`
 - D1 name: `pulseflare-d1`
 - Check schedule: `* * * * *`
+- Shared remote probe endpoint: unset
 
 Deployment is disabled unless `PULSEFLARE_ENABLE_DEPLOY=true`. Leave it unset in repos that should only run tests and builds.
 
@@ -130,13 +132,11 @@ In the repo:
 - public incidents API backed by D1 state
 - public maintenance API backed by config
 - scheduled HTTP and TCP checks from config
+- remote `region` and `proxy` probe execution
 - D1-backed service status and incident transitions
+- webhook notifications with grace-period handling
 - public status UI bundled into the Worker deployment
 - GitHub Actions deployment flow
-
-Not done yet:
-
-- live notification delivery from state changes
 
 ## Config example
 
@@ -171,13 +171,31 @@ export default defineStatusConfig({
             status: [200],
             bodyIncludes: ['ok'],
           },
+          probe: {
+            kind: 'region',
+            target: 'iad',
+          },
         },
       ],
     },
   ],
   notifications: {
     gracePeriodMinutes: 5,
-    providers: [],
+    providers: [
+      {
+        id: 'ops-webhook',
+        type: 'webhook',
+        url: 'https://hooks.acme.dev/pulseflare',
+        method: 'POST',
+        bodyTemplate: {
+          source: 'pulseflare',
+          event: '$EVENT',
+          service: '$SERVICE_NAME',
+          status: '$STATUS',
+          reason: '$REASON',
+        },
+      },
+    ],
   },
   maintenances: [],
 })
