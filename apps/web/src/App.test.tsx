@@ -20,6 +20,8 @@ describe('App', () => {
     const html = renderToStaticMarkup(<HomePage snapshot={getInitialStatusSnapshot()} />)
 
     expect(html).toContain('Uptime over the last 90 days')
+    expect(html).toContain('Upcoming maintenance')
+    expect(html).toContain('Core platform')
     expect(html).not.toContain('Incident log')
     expect(html).not.toContain('Recent incidents')
   })

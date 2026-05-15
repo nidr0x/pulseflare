@@ -91,7 +91,9 @@ body {
 .page-stack,
 .timeline,
 .service-list,
-.filter-row {
+.filter-row,
+.service-groups,
+.maintenance-banner__list {
   display: grid;
   gap: 16px;
 }
@@ -159,6 +161,10 @@ h2 {
 
 h3 {
   font-size: 1.12rem;
+}
+
+h4 {
+  font-size: 1.05rem;
 }
 
 .hero-status__signal {
@@ -258,6 +264,24 @@ h3 {
   margin: 0;
 }
 
+.service-group {
+  display: grid;
+  gap: 12px;
+}
+
+.service-group__heading,
+.maintenance-banner__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.service-group__heading p,
+.maintenance-banner__time {
+  color: var(--color-muted);
+}
+
 .service-row {
   display: grid;
   gap: 14px;
@@ -335,6 +359,15 @@ h3 {
 .timeline-entry__content {
   display: grid;
   gap: 10px;
+}
+
+.maintenance-banner__entry {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--color-line);
+  border-radius: 16px;
+  background: #fff;
 }
 
 .filter-row {

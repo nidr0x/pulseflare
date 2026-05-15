@@ -32,6 +32,7 @@ export const MOCK_STATUS_SNAPSHOT: StatusSnapshot = {
     {
       id: 'edge-api',
       name: 'API',
+      group: 'Core platform',
       target: 'api.pulseflare.dev',
       status: 'operational',
       uptimePercentage: 100,
@@ -42,6 +43,7 @@ export const MOCK_STATUS_SNAPSHOT: StatusSnapshot = {
     {
       id: 'status-site',
       name: 'Dashboard',
+      group: 'Core platform',
       target: 'status.pulseflare.dev',
       status: 'operational',
       uptimePercentage: 100,
@@ -52,6 +54,7 @@ export const MOCK_STATUS_SNAPSHOT: StatusSnapshot = {
     {
       id: 'checks-engine',
       name: 'Heartbeat app',
+      group: 'Monitoring',
       target: 'checks.pulseflare.dev',
       status: 'operational',
       uptimePercentage: 99.96,
@@ -62,6 +65,7 @@ export const MOCK_STATUS_SNAPSHOT: StatusSnapshot = {
     {
       id: 'alerts-pipeline',
       name: 'Monitoring Engine',
+      group: 'Monitoring',
       target: 'alerts.pulseflare.dev',
       status: 'operational',
       uptimePercentage: 99.87,
@@ -77,6 +81,7 @@ export const MOCK_STATUS_SNAPSHOT: StatusSnapshot = {
     {
       id: 'analytics-export',
       name: 'Website',
+      group: 'Public web',
       target: 'www.pulseflare.dev',
       status: 'operational',
       uptimePercentage: 99.93,

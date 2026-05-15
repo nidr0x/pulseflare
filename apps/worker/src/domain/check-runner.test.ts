@@ -111,4 +111,70 @@ describe('runConfiguredCheck', () => {
       reason: 'Connection refused',
     })
   })
+
+  it('routes proxied HTTP checks through the configured probe endpoint', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe('https://probe.example.com/run')
+      expect(init?.method).toBe('POST')
+
+      return Response.json({
+        status: 'up',
+        reason: 'GET https://api.example.com/health -> 200',
+        latencyMs: 42,
+      })
+    }) as typeof fetch
+
+    await expect(
+      runConfiguredCheck(
+        {
+          type: 'http',
+          url: 'https://api.example.com/health',
+          probe: {
+            kind: 'proxy',
+            target: 'https://probe.example.com/run',
+          },
+        },
+        fetcher
+      )
+    ).resolves.toMatchObject({
+      status: 'up',
+      latencyMs: 42,
+    })
+  })
+
+  it('routes regional checks through the shared remote probe endpoint', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe('https://probes.pulseflare.dev/run')
+
+      const payload = JSON.parse(String(init?.body)) as {
+        probe: { kind: string; target?: string }
+      }
+      expect(payload.probe).toEqual({ kind: 'region', target: 'iad' })
+
+      return Response.json({
+        status: 'up',
+        reason: 'GET https://api.example.com/health -> 200',
+        latencyMs: 55,
+      })
+    }) as typeof fetch
+
+    await expect(
+      runConfiguredCheck(
+        {
+          type: 'http',
+          url: 'https://api.example.com/health',
+          probe: {
+            kind: 'region',
+            target: 'iad',
+          },
+        },
+        fetcher,
+        undefined,
+        'https://probes.pulseflare.dev/run'
+      )
+    ).resolves.toMatchObject({
+      status: 'up',
+      latencyMs: 55,
+    })
+  })
 })

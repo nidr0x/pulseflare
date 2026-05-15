@@ -106,6 +106,7 @@ describe('/api/public/services', () => {
     expect(payload.services[0]).toMatchObject({
       id: 'api',
       name: 'API',
+      group: 'Core',
       target: 'https://api.example.com/health',
       status: 'unknown',
     })
@@ -147,6 +148,7 @@ describe('/api/public/services', () => {
 
     expect(response.status).toBe(200)
     expect(payload.services.find((service) => service.id === 'api')).toMatchObject({
+      group: 'Core',
       status: 'outage',
       uptimePercentage: 0,
       latencyMs: 731,

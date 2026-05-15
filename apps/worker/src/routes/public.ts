@@ -88,6 +88,7 @@ function buildServicePayload(service: StatusService, statusRecord?: PublicServic
   return {
     id: service.id,
     name: service.name,
+    group: service.group ?? null,
     target: getTarget(service.checks[0]),
     status,
     uptimePercentage: getUptimePercentage(status),
