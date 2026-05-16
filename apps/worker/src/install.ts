@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS service_status (
   service_id TEXT PRIMARY KEY REFERENCES services(id) ON DELETE CASCADE,
   current_status TEXT NOT NULL CHECK (current_status IN ('up', 'down')),
   latest_reason TEXT,
-  checked_at TEXT NOT NULL
+  checked_at TEXT NOT NULL,
+  failing_since TEXT
 );
 
 CREATE TABLE IF NOT EXISTS incidents (

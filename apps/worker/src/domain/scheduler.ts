@@ -1,9 +1,10 @@
 import type { StatusService } from '@pulseflare/schema'
 
-import { getWorkerDatabase } from '../config'
+import { getRemoteProbeUrl, getWorkerDatabase } from '../config'
 import { ensureBootstrapSchema, getRuntimeConfig, syncServices } from '../install'
 import { runConfiguredCheck, type CheckRunResult } from './check-runner'
 import { deriveIncidentMutation } from './incident-engine'
+import { buildNotificationDispatches, dispatchNotification } from './notification-engine'
 
 type Fetcher = typeof fetch
 
@@ -11,6 +12,12 @@ type OpenIncidentRow = {
   id: string
   status: 'open'
   latest_reason: string | null
+}
+
+type ServiceStatusStateRow = {
+  current_status: 'up' | 'down'
+  checked_at: string
+  failing_since: string | null
 }
 
 export type ScheduledCheckSummary = {
@@ -37,20 +44,27 @@ async function findOpenIncident(database: D1Database, serviceId: string): Promis
 
 async function upsertServiceStatus(
   database: D1Database,
-  input: { serviceId: string; status: 'up' | 'down'; latestReason: string | null; checkedAt: string }
+  input: {
+    serviceId: string
+    status: 'up' | 'down'
+    latestReason: string | null
+    checkedAt: string
+    failingSince: string | null
+  }
 ): Promise<void> {
   await database
     .prepare(
       `
-        INSERT INTO service_status (service_id, current_status, latest_reason, checked_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO service_status (service_id, current_status, latest_reason, checked_at, failing_since)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(service_id) DO UPDATE SET
           current_status = excluded.current_status,
           latest_reason = excluded.latest_reason,
-          checked_at = excluded.checked_at
+          checked_at = excluded.checked_at,
+          failing_since = excluded.failing_since
       `
     )
-    .bind(input.serviceId, input.status, input.latestReason, input.checkedAt)
+    .bind(input.serviceId, input.status, input.latestReason, input.checkedAt, input.failingSince)
     .run()
 }
 
@@ -125,20 +139,91 @@ function summarizeServiceResults(results: CheckRunResult[]): { status: 'up' | 'd
   }
 }
 
-async function runServiceChecks(service: StatusService, fetcher: Fetcher): Promise<ReturnType<typeof summarizeServiceResults>> {
+async function runServiceChecks(
+  service: StatusService,
+  fetcher: Fetcher,
+  remoteProbeUrl?: string
+): Promise<ReturnType<typeof summarizeServiceResults>> {
   const results: CheckRunResult[] = []
 
   for (const check of service.checks) {
-    results.push(await runConfiguredCheck(check, fetcher))
+    results.push(await runConfiguredCheck(check, fetcher, undefined, remoteProbeUrl))
   }
 
   return summarizeServiceResults(results)
 }
 
+async function getServiceStatusState(
+  database: D1Database,
+  serviceId: string
+): Promise<ServiceStatusStateRow | null> {
+  return (
+    (await database
+      .prepare(
+        `
+          SELECT current_status, checked_at, failing_since
+          FROM service_status
+          WHERE service_id = ?
+          LIMIT 1
+        `
+      )
+      .bind(serviceId)
+      .first<ServiceStatusStateRow>()) ?? null
+  )
+}
+
+function getFailingSince(
+  previous: ServiceStatusStateRow | null,
+  currentStatus: 'up' | 'down',
+  checkedAt: string
+): string | null {
+  if (currentStatus === 'up') {
+    return null
+  }
+
+  if (previous?.current_status === 'down' && previous.failing_since) {
+    return previous.failing_since
+  }
+
+  return checkedAt
+}
+
+function gracePeriodSatisfied(
+  failingSince: string | null,
+  checkedAt: string,
+  gracePeriodMinutes: number | undefined
+): boolean {
+  if (!failingSince) {
+    return false
+  }
+
+  if (!gracePeriodMinutes || gracePeriodMinutes <= 0) {
+    return true
+  }
+
+  return Date.parse(checkedAt) - Date.parse(failingSince) >= gracePeriodMinutes * 60 * 1000
+}
+
+function isServiceUnderActiveMaintenance(config: ReturnType<typeof getRuntimeConfig>, serviceId: string, checkedAt: string): boolean {
+  const nowMs = Date.parse(checkedAt)
+
+  return config.maintenances.some((entry) => {
+    const appliesToService = !entry.services || entry.services.length === 0 || entry.services.includes(serviceId)
+    if (!appliesToService) {
+      return false
+    }
+
+    const startMs = Date.parse(entry.start)
+    const endMs = entry.end ? Date.parse(entry.end) : undefined
+    return startMs <= nowMs && (endMs === undefined || endMs > nowMs)
+  })
+}
+
 export async function runScheduledChecks(
   env: unknown,
   fetcher: Fetcher = globalThis.fetch,
-  checkedAt = new Date().toISOString()
+  checkedAt = new Date().toISOString(),
+  notificationFetcher: Fetcher = fetcher
 ): Promise<ScheduledCheckSummary> {
   const database = getWorkerDatabase(env)
 
@@ -147,6 +232,7 @@ export async function runScheduledChecks(
   }
 
   const config = getRuntimeConfig(env)
+  const remoteProbeUrl = getRemoteProbeUrl(env)
 
   await ensureBootstrapSchema(database)
   await syncServices(database, config)
@@ -155,7 +241,9 @@ export async function runScheduledChecks(
   let downCount = 0
 
   for (const service of config.services) {
-    const result = await runServiceChecks(service, fetcher)
+    const previousStatus = await getServiceStatusState(database, service.id)
+    const result = await runServiceChecks(service, fetcher, remoteProbeUrl)
+    const failingSince = getFailingSince(previousStatus, result.status, checkedAt)
 
     if (result.status === 'up') {
       upCount += 1
@@ -168,6 +256,7 @@ export async function runScheduledChecks(
       status: result.status,
       latestReason: result.reason,
       checkedAt,
+      failingSince,
     })
 
     if (typeof result.latencyMs === 'number') {
@@ -179,11 +268,17 @@ export async function runScheduledChecks(
     }
 
     const existingOpenIncident = await findOpenIncident(database, service.id)
-    const mutation = deriveIncidentMutation({
-      currentStatus: result.status,
-      currentReason: result.reason,
-      hasOpenIncident: Boolean(existingOpenIncident),
-    })
+    const shouldOpenIncident =
+      result.status === 'down' && gracePeriodSatisfied(failingSince, checkedAt, config.notifications.gracePeriodMinutes)
+
+    const mutation =
+      result.status === 'down' && !shouldOpenIncident
+        ? { action: 'noop', status: existingOpenIncident ? 'open' : null, latestReason: result.reason } as const
+        : deriveIncidentMutation({
+            currentStatus: result.status,
+            currentReason: result.reason,
+            hasOpenIncident: Boolean(existingOpenIncident),
+          })
 
     if (mutation.action === 'open') {
       await openIncident(database, {
@@ -199,6 +294,32 @@ export async function runScheduledChecks(
         latestReason: mutation.latestReason,
         resolvedAt: checkedAt,
       })
+    }
+
+    const shouldSuppressNotification =
+      mutation.action === 'open' && isServiceUnderActiveMaintenance(config, service.id, checkedAt)
+
+    if (!shouldSuppressNotification) {
+      const dispatches = buildNotificationDispatches(mutation, config.notifications.providers)
+      for (const dispatch of dispatches) {
+        const provider = config.notifications.providers.find((entry) => entry.id === dispatch.providerId)
+        if (!provider) {
+          continue
+        }
+
+        await dispatchNotification(
+          provider,
+          {
+            event: dispatch.event,
+            serviceId: service.id,
+            serviceName: service.name,
+            status: result.status,
+            reason: mutation.latestReason,
+            checkedAt,
+          },
+          notificationFetcher
+        )
+      }
     }
   }
 

@@ -60,6 +60,7 @@ Optional variables:
 - `PULSEFLARE_WORKER_NAME` defaults to `pulseflare-status`
 - `PULSEFLARE_D1_NAME` defaults to `pulseflare-d1`
 - `PULSEFLARE_CHECK_CRON` defaults to `* * * * *`
+- `PULSEFLARE_REMOTE_PROBE_URL` is optional and enables shared remote execution for checks using `probe.kind = 'region'`
 
 Leave `PULSEFLARE_ENABLE_DEPLOY` unset anywhere that should only test and build.
 
@@ -85,3 +86,5 @@ If deployment is skipped, check that `PULSEFLARE_ENABLE_DEPLOY` is a repository 
 If D1 migration fails, rerun the workflow after checking that the API token has D1 edit access for the target account.
 
 If static assets do not update, check that the `Verify project` step built `apps/web/dist` before deploy.
+
+If a regional probe always reports that no shared endpoint is configured, check that `PULSEFLARE_REMOTE_PROBE_URL` is set as a repository variable and points to a probe service that accepts Pulseflare's JSON probe contract.

@@ -6,7 +6,6 @@ Pulseflare should stay small: config in code, status data in D1, and deployment 
 
 - Replace the remaining demo UI data with API data.
 - Add richer uptime history from persisted status data.
-- Send webhook notifications when state changes.
 - Improve first-run deploy errors.
 
 ## Later

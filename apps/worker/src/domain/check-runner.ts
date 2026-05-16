@@ -12,6 +12,12 @@ type TcpConnector = (address: { hostname: string; port: number }) => {
   close(): Promise<void>
 }
 
+type FetchResultShape = {
+  status?: unknown
+  reason?: unknown
+  latencyMs?: unknown
+}
+
 function formatExpectedStatuses(statuses: number[]): string {
   return statuses.join(', ')
 }
@@ -77,11 +83,88 @@ async function getDefaultTcpConnector(): Promise<TcpConnector> {
   return runtime.connect
 }
 
+function isRemoteProbeUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:'
+  } catch {
+    return false
+  }
+}
+
+async function runRemoteProbe(
+  check: StatusCheck,
+  endpoint: string,
+  fetcher: Fetcher
+): Promise<CheckRunResult> {
+  try {
+    const response = await fetcher(endpoint, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        check,
+        probe: check.probe,
+      }),
+    })
+
+    if (!response.ok) {
+      return {
+        status: 'down',
+        reason: `Remote probe request failed with ${response.status}`,
+      }
+    }
+
+    const payload = (await response.json()) as FetchResultShape
+    if (payload.status !== 'up' && payload.status !== 'down') {
+      return {
+        status: 'down',
+        reason: 'Remote probe returned an invalid status payload',
+      }
+    }
+
+    return {
+      status: payload.status,
+      reason: typeof payload.reason === 'string' ? payload.reason : 'Remote probe completed',
+      latencyMs: typeof payload.latencyMs === 'number' ? payload.latencyMs : undefined,
+    }
+  } catch (error) {
+    return {
+      status: 'down',
+      reason: error instanceof Error ? error.message : `Remote probe failed for ${endpoint}`,
+    }
+  }
+}
+
 export async function runConfiguredCheck(
   check: StatusCheck,
   fetcher: Fetcher = globalThis.fetch,
-  tcpConnect?: TcpConnector
+  tcpConnect?: TcpConnector,
+  remoteProbeUrl?: string
 ): Promise<CheckRunResult> {
+  if (check.probe?.kind === 'proxy') {
+    if (!check.probe.target || !isRemoteProbeUrl(check.probe.target)) {
+      return {
+        status: 'down',
+        reason: 'Proxy probe target must be a valid HTTP(S) URL',
+      }
+    }
+
+    return runRemoteProbe(check, check.probe.target, fetcher)
+  }
+
+  if (check.probe?.kind === 'region') {
+    if (!remoteProbeUrl) {
+      return {
+        status: 'down',
+        reason: `No shared remote probe endpoint configured for region probe ${check.probe.target ?? 'unknown'}`,
+      }
+    }
+
+    return runRemoteProbe(check, remoteProbeUrl, fetcher)
+  }
+
   if (check.type === 'tcp') {
     return runTcpCheck(check.target, check.timeoutMs, tcpConnect ?? (await getDefaultTcpConnector()))
   }
