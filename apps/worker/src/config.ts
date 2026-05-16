@@ -6,6 +6,7 @@ export type WorkerEnv = {
   }
   PULSEFLARE_D1?: D1Database
   PULSEFLARE_BOOTSTRAP_TOKEN?: string
+  PULSEFLARE_REMOTE_PROBE_URL?: string
   STATUS_CONFIG?: StatusConfig
 }
 
@@ -43,4 +44,13 @@ export function getWorkerAssets(env: unknown): WorkerEnv['ASSETS'] | undefined {
 
   const { ASSETS } = env as WorkerEnv
   return ASSETS
+}
+
+export function getRemoteProbeUrl(env: unknown): string | undefined {
+  if (!env || typeof env !== 'object') {
+    return undefined
+  }
+
+  const { PULSEFLARE_REMOTE_PROBE_URL } = env as WorkerEnv
+  return PULSEFLARE_REMOTE_PROBE_URL
 }

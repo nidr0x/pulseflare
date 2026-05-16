@@ -8,6 +8,7 @@ export type UptimeWindowState = 'up' | 'degraded' | 'down' | 'unknown'
 export type ServiceRecord = {
   id: string
   name: string
+  group: string | null
   target: string
   status: ServiceState
   uptimePercentage: number

@@ -6,7 +6,7 @@ Pulseflare reads config from [`config/pulse.config.ts`](../config/pulse.config.t
 
 Use `defineStatusConfig(...)` for the checked-in config. Use `parseStatusConfig(...)` when runtime validation is needed.
 
-This document describes the schema. Some fields are not connected to runtime behavior yet.
+This document describes the schema and the runtime behavior that exists today.
 
 ```ts
 import { defineStatusConfig } from '@pulseflare/schema'
@@ -144,6 +144,18 @@ Optional probe routing:
 - `kind: 'proxy'`
 - optional `target` for region or proxy-specific routing
 
+Runtime behavior:
+
+- `local` runs inside the Worker directly
+- `region` sends the check to the shared remote probe endpoint configured with `PULSEFLARE_REMOTE_PROBE_URL`
+- `proxy` sends the check to the full HTTP(S) URL stored in `probe.target`
+
+Remote probe requests are JSON `POST` calls with the original `check` and `probe` values. The response must be JSON with:
+
+- `status`: `up` or `down`
+- `reason`: string
+- optional `latencyMs`: number
+
 ## Full example
 
 ```ts
@@ -242,10 +254,8 @@ Today:
 - the Worker reads `config/pulse.config.ts` for the protected bootstrap install flow
 - bootstrap and scheduled runs sync `services` from config into D1
 - scheduled runs execute HTTP and TCP checks from config and persist status/latency results
+- scheduled runs dispatch webhook notifications on incident open and resolve transitions
+- notification grace periods delay incident opening and webhook delivery until sustained failure is confirmed
+- active maintenance windows suppress incident-open notifications for affected services
 - the Worker exposes public summary, services, incidents, and maintenance routes
 - the web app overlays public API responses onto bundled fallback data
-
-Later:
-
-- service definitions from config drive notifications too
-- maintenance and notification settings affect live status behavior

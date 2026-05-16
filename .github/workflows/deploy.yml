@@ -1,6 +1,7 @@
 name: Deploy Pulseflare
 
 on:
+  pull_request:
   push:
     branches:
       - main
@@ -32,7 +33,7 @@ jobs:
 
   deploy:
     needs: verify
-    if: vars.PULSEFLARE_ENABLE_DEPLOY == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.PULSEFLARE_ENABLE_DEPLOY == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
