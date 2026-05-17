@@ -4,7 +4,7 @@
     "composite": true,
     "allowImportingTsExtensions": true,
     "lib": ["ES2022"],
-    "types": ["@cloudflare/workers-types"],
+    "types": ["node"],
     "noEmit": false,
     "emitDeclarationOnly": true,
     "outDir": "dist",
@@ -16,5 +16,5 @@
     }
   },
   "references": [{ "path": "../../packages/core" }, { "path": "../../packages/schema" }, { "path": "../../config" }],
-  "include": ["src/**/*.ts", "src/**/*.tsx"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "worker-configuration.d.ts"]
 }

@@ -67,27 +67,11 @@ jobs:
 
       - name: Render deploy config
         run: |
-          CHECK_CRON="${PULSEFLARE_CHECK_CRON:-* * * * *}"
-          cat > apps/worker/wrangler.deploy.toml <<EOF
-          name = "${{ steps.resources.outputs.worker_name }}"
-          main = "src/index.ts"
-          compatibility_date = "2026-04-18"
-          compatibility_flags = ["nodejs_compat"]
-
-          [assets]
-          directory = "../web/dist"
-          binding = "ASSETS"
-          run_worker_first = ["/api/*"]
-          not_found_handling = "single-page-application"
-
-          [triggers]
-          crons = ["${CHECK_CRON}"]
-
-          [[d1_databases]]
-          binding = "PULSEFLARE_D1"
-          database_name = "${{ steps.resources.outputs.database_name }}"
-          database_id = "${{ steps.resources.outputs.database_id }}"
-          EOF
+          PULSEFLARE_WORKER_NAME_RENDERED="${{ steps.resources.outputs.worker_name }}" \
+          PULSEFLARE_D1_NAME_RENDERED="${{ steps.resources.outputs.database_name }}" \
+          PULSEFLARE_D1_ID_RENDERED="${{ steps.resources.outputs.database_id }}" \
+          PULSEFLARE_CHECK_CRON_RENDERED="${PULSEFLARE_CHECK_CRON:-* * * * *}" \
+          node .github/scripts/render-deploy-wrangler-config.mjs
 
       - name: Apply D1 migrations
         run: npx wrangler d1 migrations apply ${{ steps.resources.outputs.database_name }} --remote --config apps/worker/wrangler.deploy.toml

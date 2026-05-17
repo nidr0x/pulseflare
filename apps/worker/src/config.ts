@@ -1,10 +1,9 @@
 import type { StatusConfig } from '@pulseflare/schema'
 
-export type WorkerEnv = {
+export type WorkerEnv = Partial<Env> & {
   ASSETS?: {
     fetch(request: Request): Promise<Response>
   }
-  PULSEFLARE_D1?: D1Database
   PULSEFLARE_BOOTSTRAP_TOKEN?: string
   PULSEFLARE_REMOTE_PROBE_URL?: string
   STATUS_CONFIG?: StatusConfig
