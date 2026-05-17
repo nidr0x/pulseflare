@@ -2,43 +2,7 @@ import defaultStatusConfig from '../../../config/pulse.config.ts'
 import { parseStatusConfig, type StatusConfig } from '@pulseflare/schema'
 
 import { getWorkerConfig } from './config'
-
-export const BOOTSTRAP_SCHEMA_SQL = `
-PRAGMA foreign_keys = ON;
-
-CREATE TABLE IF NOT EXISTS services (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  service_group TEXT,
-  sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0)
-);
-
-CREATE TABLE IF NOT EXISTS service_status (
-  service_id TEXT PRIMARY KEY REFERENCES services(id) ON DELETE CASCADE,
-  current_status TEXT NOT NULL CHECK (current_status IN ('up', 'down')),
-  latest_reason TEXT,
-  checked_at TEXT NOT NULL,
-  failing_since TEXT
-);
-
-CREATE TABLE IF NOT EXISTS incidents (
-  id TEXT PRIMARY KEY,
-  service_id TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
-  status TEXT NOT NULL CHECK (status IN ('open', 'resolved')),
-  latest_reason TEXT,
-  opened_at TEXT NOT NULL,
-  resolved_at TEXT,
-  CHECK ((status = 'open' AND resolved_at IS NULL) OR status = 'resolved')
-);
-
-CREATE TABLE IF NOT EXISTS latency_points (
-  id TEXT PRIMARY KEY,
-  service_id TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
-  recorded_at TEXT NOT NULL,
-  latency_ms INTEGER NOT NULL CHECK (latency_ms >= 0),
-  location_label TEXT NOT NULL
-);
-`
+import { BASE_SCHEMA_SQL } from './schema'
 
 type CountRow = {
   service_count: number | string | null
@@ -49,7 +13,7 @@ export function getRuntimeConfig(env: unknown): StatusConfig {
 }
 
 export async function ensureBootstrapSchema(database: D1Database): Promise<void> {
-  await database.exec(BOOTSTRAP_SCHEMA_SQL)
+  await database.exec(BASE_SCHEMA_SQL)
 }
 
 export async function countServices(database: D1Database): Promise<number> {
