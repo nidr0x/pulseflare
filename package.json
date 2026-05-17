@@ -8,13 +8,12 @@
   ],
   "scripts": {
     "build": "npm run build --workspace @pulseflare/web && npx tsc -b tsconfig.json --force --pretty false",
-    "test": "npm run test --workspaces && node --test .github/scripts/resolve-cloudflare-resources.test.mjs",
+    "test": "npm run test --workspaces && node --test .github/scripts/resolve-cloudflare-resources.test.mjs .github/scripts/render-deploy-wrangler-config.test.mjs",
     "lint": "npm run lint --workspaces",
     "dev:web": "npm run dev --workspace @pulseflare/web",
     "dev:worker": "npm run dev --workspace @pulseflare/worker"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260503.1",
     "@types/node": "^25",
     "@types/react": "^19",
     "@types/react-dom": "^19",

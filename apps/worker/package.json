@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "wrangler dev --config wrangler.toml",
     "build": "tsc --build tsconfig.json --force --pretty false",
-    "test": "vitest run src/index.test.ts src/routes/public.test.ts src/routes/bootstrap.test.ts src/repositories/d1.test.ts src/domain/check-runner.test.ts src/domain/scheduler.test.ts",
+    "test": "vitest run src/index.test.ts src/install.test.ts src/routes/public.test.ts src/routes/bootstrap.test.ts src/repositories/d1.test.ts src/domain/check-runner.test.ts src/domain/scheduler.test.ts",
     "lint": "tsc --build tsconfig.json --force --pretty false"
   },
   "dependencies": {
