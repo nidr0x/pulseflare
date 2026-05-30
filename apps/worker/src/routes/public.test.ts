@@ -302,3 +302,79 @@ describe('/api/public/maintenance', () => {
     await expect(response.json()).resolves.toEqual({ maintenance: [] })
   })
 })
+
+describe('RSS Feed (/feeds/incidents.xml)', () => {
+  const statusConfig = {
+    site: {
+      name: 'Custom Acme Status',
+      description: 'Acme services health monitoring',
+      url: 'https://status.acme.com',
+    },
+    services: [
+      { id: 'api', name: 'API', checks: [{ type: 'http', url: 'https://api.example.com' }] },
+    ],
+    notifications: { providers: [] },
+    maintenances: [],
+  }
+
+  it('returns XML format with incidents from D1', async () => {
+    const database = {
+      prepare(query: string) {
+        expect(query).toContain('FROM incidents')
+        return {
+          async all() {
+            return {
+              results: [
+                {
+                  id: 'incident-123',
+                  service_id: 'api',
+                  service_name: 'API Service',
+                  status: 'open',
+                  latest_reason: 'Database connection failed',
+                  opened_at: '2026-05-30T10:00:00.000Z',
+                  resolved_at: null,
+                },
+              ],
+            }
+          },
+        }
+      },
+    }
+
+    const response = await worker.fetch(
+      new Request('https://example.com/feeds/incidents.xml'),
+      { STATUS_CONFIG: statusConfig, PULSEFLARE_D1: database } as never,
+      {} as ExecutionContext
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('application/xml; charset=utf-8')
+    const text = await response.text()
+
+    expect(text).toContain('<?xml version="1.0" encoding="UTF-8" ?>')
+    expect(text).toContain('<title>Custom Acme Status Incidents</title>')
+    expect(text).toContain('<link>https://status.acme.com</link>')
+    expect(text).toContain('<description>Acme services health monitoring</description>')
+    expect(text).toContain('<item>')
+    expect(text).toContain('<title>Database connection failed</title>')
+    expect(text).toContain('<link>https://status.acme.com/incidents#incident-123</link>')
+    expect(text).toContain('<![CDATA[Service: API Service\nStatus: investigating')
+    expect(text).toContain('Database connection failed')
+    expect(text).toContain('<guid isPermaLink="false">incident-123</guid>')
+  })
+
+  it('falls back gracefully when database is missing or fails', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/feeds/incidents.xml'),
+      { STATUS_CONFIG: statusConfig } as never,
+      {} as ExecutionContext
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('application/xml; charset=utf-8')
+    const text = await response.text()
+    expect(text).toContain('<title>Custom Acme Status Incidents</title>')
+    expect(text).not.toContain('<item>')
+  })
+})
+

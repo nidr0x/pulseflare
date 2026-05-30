@@ -212,3 +212,88 @@ export async function handlePublicMaintenance(env: unknown, now = new Date()): P
     maintenance: [...activeAndUpcoming, ...recentCompleted].slice(0, MAINTENANCE_RESPONSE_LIMIT),
   })
 }
+
+function escapeXml(unsafe: string): string {
+  return unsafe.replace(/[<>&'"]/g, (c) => {
+    switch (c) {
+      case '<':
+        return '&lt;'
+      case '>':
+        return '&gt;'
+      case '&':
+        return '&amp;'
+      case '\'':
+        return '&apos;'
+      case '"':
+        return '&quot;'
+      default:
+        return c
+    }
+  })
+}
+
+export async function handlePublicRss(env: unknown, request: Request): Promise<Response> {
+  const config = getConfig(env)
+  const database = getWorkerDatabase(env)
+
+  const siteName = config.site.name || 'Pulseflare'
+  const siteDescription = config.site.description || 'System health and incident reporting'
+  const siteUrl = config.site.url || new URL(request.url).origin
+
+  let incidents: Awaited<ReturnType<typeof listPublicIncidents>> = []
+  if (database) {
+    try {
+      incidents = await listPublicIncidents(database)
+    } catch {
+      // Ignore database failures
+    }
+  }
+
+  const feedUrl = `${siteUrl.replace(/\/$/, '')}/feeds/incidents.xml`
+  const lastBuildDate = new Date().toUTCString()
+
+  let itemsXml = ''
+  for (const incident of incidents) {
+    const title = incident.latestReason ?? `${incident.serviceName} incident`
+    const status = incident.status === 'resolved' ? 'resolved' : 'investigating'
+    const guid = incident.id
+    const link = `${siteUrl.replace(/\/$/, '')}/incidents#${incident.id}`
+    const pubDate = new Date(incident.resolvedAt ?? incident.openedAt).toUTCString()
+
+    const description = `Service: ${incident.serviceName}
+Status: ${status}
+Started at: ${incident.openedAt}
+${incident.resolvedAt ? `Resolved at: ${incident.resolvedAt}` : ''}
+
+Summary: ${incident.latestReason ?? `${incident.serviceName} is being investigated.`}`
+
+    itemsXml += `    <item>
+      <title>${escapeXml(title)}</title>
+      <link>${escapeXml(link)}</link>
+      <description><![CDATA[${description}]]></description>
+      <pubDate>${pubDate}</pubDate>
+      <guid isPermaLink="false">${escapeXml(guid)}</guid>
+    </item>\n`
+  }
+
+  const rssXml = `<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>${escapeXml(siteName)} Incidents</title>
+    <link>${escapeXml(siteUrl)}</link>
+    <description>${escapeXml(siteDescription)}</description>
+    <generator>Pulseflare</generator>
+    <language>en-us</language>
+    <lastBuildDate>${lastBuildDate}</lastBuildDate>
+    <atom:link href="${escapeXml(feedUrl)}" rel="self" type="application/rss+xml" />
+${itemsXml}  </channel>
+</rss>`
+
+  return new Response(rssXml, {
+    headers: {
+      'Content-Type': 'application/xml; charset=utf-8',
+      'Cache-Control': 'public, max-age=60',
+    },
+  })
+}
+

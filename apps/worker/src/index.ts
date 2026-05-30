@@ -1,7 +1,7 @@
 import { handleBootstrapInstall } from './routes/bootstrap'
 import { getWorkerAssets } from './config'
 import { runScheduledChecks } from './domain/scheduler'
-import { handlePublicIncidents, handlePublicMaintenance, handlePublicServices, handlePublicSummary } from './routes/public'
+import { handlePublicIncidents, handlePublicMaintenance, handlePublicRss, handlePublicServices, handlePublicSummary } from './routes/public'
 
 const worker = {
   async fetch(request: Request, env: unknown, _ctx: ExecutionContext): Promise<Response> {
@@ -25,6 +25,10 @@ const worker = {
 
     if (url.pathname === '/api/public/maintenance') {
       return handlePublicMaintenance(env)
+    }
+
+    if (url.pathname === '/feeds/incidents.xml' || url.pathname === '/rss' || url.pathname === '/feeds/incidents') {
+      return handlePublicRss(env, request)
     }
 
     const assets = getWorkerAssets(env)
