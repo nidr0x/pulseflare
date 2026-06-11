@@ -6,6 +6,7 @@ import { listPublicIncidents, listPublicServiceStatuses, type PublicServiceStatu
 type ServiceState = 'operational' | 'outage' | 'unknown'
 type WindowState = 'up' | 'down' | 'unknown'
 type PublicMaintenanceStatus = 'scheduled' | 'in_progress' | 'completed'
+type PublicSummaryStatus = 'operational' | 'degraded' | 'unknown'
 
 const HISTORY_WINDOW_DAYS = 90
 const MAINTENANCE_RESPONSE_LIMIT = 10
@@ -20,21 +21,49 @@ function getLatestCheckedAt(records: PublicServiceStatusRecord[]): string {
   return timestamps.at(-1) ?? new Date().toISOString()
 }
 
-export async function handlePublicSummary(env: unknown): Promise<Response> {
-  const config = getConfig(env)
-  const statuses = await getRuntimeServiceStatuses(env)
-  const records = [...statuses.values()]
+function buildProductPayload(config: StatusConfig) {
+  return {
+    name: config.site.name || 'Pulseflare',
+    description: config.site.description || 'System health and incident reporting',
+  }
+}
+
+function buildSummaryPayload(
+  config: StatusConfig,
+  records: PublicServiceStatusRecord[]
+): {
+  status: PublicSummaryStatus
+  upCount: number
+  downCount: number
+  totalCount: number
+  checkedAt: string
+} {
   const totalCount = config.services.length || records.length
   const upCount = records.filter((record) => record.status === 'up').length
   const downCount = records.filter((record) => record.status === 'down').length
 
-  return Response.json({
-    status: downCount > 0 ? 'degraded' : 'operational',
+  let status: PublicSummaryStatus = 'unknown'
+  if (downCount > 0) {
+    status = 'degraded'
+  } else if (upCount > 0) {
+    status = 'operational'
+  }
+
+  return {
+    status,
     upCount,
     downCount,
     totalCount,
     checkedAt: getLatestCheckedAt(records),
-  })
+  }
+}
+
+export async function handlePublicSummary(env: unknown): Promise<Response> {
+  const config = getConfig(env)
+  const statuses = await getRuntimeServiceStatuses(env)
+  const records = [...statuses.values()]
+
+  return Response.json(buildSummaryPayload(config, records))
 }
 
 function getTarget(check: StatusCheck): string {
@@ -97,6 +126,10 @@ function buildServicePayload(service: StatusService, statusRecord?: PublicServic
   }
 }
 
+function buildServicesPayload(config: StatusConfig, statuses: Map<string, PublicServiceStatusRecord>) {
+  return config.services.map((service) => buildServicePayload(service, statuses.get(service.id)))
+}
+
 async function getRuntimeServiceStatuses(env: unknown): Promise<Map<string, PublicServiceStatusRecord>> {
   const database = getWorkerDatabase(env)
 
@@ -124,8 +157,21 @@ export async function handlePublicServices(env: unknown): Promise<Response> {
   const statuses = await getRuntimeServiceStatuses(env)
 
   return Response.json({
-    services: config.services.map((service) => buildServicePayload(service, statuses.get(service.id))),
+    services: buildServicesPayload(config, statuses),
   })
+}
+
+function buildIncidentPayload(incidents: Awaited<ReturnType<typeof listPublicIncidents>>) {
+  return incidents.map((incident) => ({
+    id: incident.id,
+    title: incident.latestReason ?? `${incident.serviceName} incident`,
+    status: incident.status === 'resolved' ? 'resolved' : 'investigating',
+    impact: 'major' as const,
+    startedAt: incident.openedAt,
+    resolvedAt: incident.resolvedAt ?? undefined,
+    summary: incident.latestReason ?? `${incident.serviceName} is being investigated.`,
+    services: [incident.serviceId],
+  }))
 }
 
 export async function handlePublicIncidents(env: unknown): Promise<Response> {
@@ -138,16 +184,7 @@ export async function handlePublicIncidents(env: unknown): Promise<Response> {
   const incidents = await listPublicIncidents(database)
 
   return Response.json({
-    incidents: incidents.map((incident) => ({
-      id: incident.id,
-      title: incident.latestReason ?? `${incident.serviceName} incident`,
-      status: incident.status === 'resolved' ? 'resolved' : 'investigating',
-      impact: 'major',
-      startedAt: incident.openedAt,
-      resolvedAt: incident.resolvedAt ?? undefined,
-      summary: incident.latestReason ?? `${incident.serviceName} is being investigated.`,
-      services: [incident.serviceId],
-    })),
+    incidents: buildIncidentPayload(incidents),
   })
 }
 
@@ -210,6 +247,35 @@ export async function handlePublicMaintenance(env: unknown, now = new Date()): P
 
   return Response.json({
     maintenance: [...activeAndUpcoming, ...recentCompleted].slice(0, MAINTENANCE_RESPONSE_LIMIT),
+  })
+}
+
+export async function handlePublicSnapshot(env: unknown, now = new Date()): Promise<Response> {
+  const config = getConfig(env)
+  const statuses = await getRuntimeServiceStatuses(env)
+  const statusRecords = [...statuses.values()]
+  const database = getWorkerDatabase(env)
+
+  const incidents = database ? await listPublicIncidents(database) : []
+  const maintenanceResponse = await handlePublicMaintenance(env, now)
+  const { maintenance } = (await maintenanceResponse.json()) as {
+    maintenance: Array<{
+      id: string
+      title: string
+      body: string
+      start: string
+      end?: string
+      status: PublicMaintenanceStatus
+      services: string[]
+    }>
+  }
+
+  return Response.json({
+    product: buildProductPayload(config),
+    summary: buildSummaryPayload(config, statusRecords),
+    services: buildServicesPayload(config, statuses),
+    incidents: buildIncidentPayload(incidents),
+    maintenance,
   })
 }
 
@@ -296,4 +362,3 @@ ${itemsXml}  </channel>
     },
   })
 }
-

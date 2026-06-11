@@ -158,6 +158,106 @@ describe('/api/public/services', () => {
   })
 })
 
+describe('/api/public/snapshot', () => {
+  it('returns the full public status payload without relying on bundled demo data', async () => {
+    const database = {
+      prepare(query: string) {
+        if (query.includes('FROM incidents')) {
+          return {
+            async all() {
+              return {
+                results: [
+                  {
+                    id: 'incident-1',
+                    service_id: 'api',
+                    service_name: 'API',
+                    status: 'open',
+                    latest_reason: 'API health checks are failing',
+                    opened_at: '2026-04-18T17:00:00.000Z',
+                    resolved_at: null,
+                  },
+                ],
+              }
+            },
+          }
+        }
+
+        return {
+          async all() {
+            return {
+              results: [
+                {
+                  id: 'api',
+                  name: 'API',
+                  service_group: 'Core',
+                  current_status: 'up',
+                  checked_at: '2026-04-18T17:01:00.000Z',
+                  latest_latency_ms: 123,
+                },
+              ],
+            }
+          },
+        }
+      },
+    }
+
+    const response = await worker.fetch(
+      new Request('https://example.com/api/public/snapshot'),
+      {
+        STATUS_CONFIG: {
+          site: {
+            name: 'Acme Status',
+            description: 'System health and incident reporting',
+          },
+          services: [
+            { id: 'api', name: 'API', checks: [{ type: 'http', url: 'https://api.example.com/health' }] },
+          ],
+          notifications: { providers: [] },
+          maintenances: [],
+        },
+        PULSEFLARE_D1: database,
+      } as never,
+      {} as ExecutionContext
+    )
+    const payload = (await response.json()) as {
+      product: { name: string; description: string }
+      summary: { status: string; checkedAt: string; upCount: number; downCount: number; totalCount: number }
+      services: Array<{ id: string; name: string; status: string; latencyMs: number }>
+      incidents: Array<{ id: string; title: string; status: string }>
+      maintenance: unknown[]
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.product).toEqual({
+      name: 'Acme Status',
+      description: 'System health and incident reporting',
+    })
+    expect(payload.summary).toMatchObject({
+      status: 'operational',
+      checkedAt: '2026-04-18T17:01:00.000Z',
+      upCount: 1,
+      downCount: 0,
+      totalCount: 1,
+    })
+    expect(payload.services).toEqual([
+      expect.objectContaining({
+        id: 'api',
+        name: 'API',
+        status: 'operational',
+        latencyMs: 123,
+      }),
+    ])
+    expect(payload.incidents).toEqual([
+      expect.objectContaining({
+        id: 'incident-1',
+        title: 'API health checks are failing',
+        status: 'investigating',
+      }),
+    ])
+    expect(payload.maintenance).toEqual([])
+  })
+})
+
 describe('/api/public/incidents', () => {
   it('returns D1 incidents sorted newest first', async () => {
     const database = {
@@ -377,4 +477,3 @@ describe('RSS Feed (/feeds/incidents.xml)', () => {
     expect(text).not.toContain('<item>')
   })
 })
-

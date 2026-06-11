@@ -1,6 +1,4 @@
-import { MOCK_STATUS_SNAPSHOT } from './mockSnapshot'
-
-export type SummaryState = 'operational' | 'degraded'
+export type SummaryState = 'operational' | 'degraded' | 'unknown'
 
 export type ServiceState = 'operational' | 'degraded' | 'outage' | 'unknown'
 export type UptimeWindowState = 'up' | 'degraded' | 'down' | 'unknown'
@@ -40,7 +38,7 @@ export type MaintenanceRecord = {
 export type StatusSnapshot = {
   product: {
     name: string
-    strapline: string
+    strapline?: string
     description: string
   }
   summary: {
@@ -55,6 +53,23 @@ export type StatusSnapshot = {
   maintenance: MaintenanceRecord[]
 }
 
+export const EMPTY_STATUS_SNAPSHOT: StatusSnapshot = {
+  product: {
+    name: 'Status',
+    description: 'Waiting for live status data.',
+  },
+  summary: {
+    status: 'unknown',
+    checkedAt: new Date(0).toISOString(),
+    upCount: 0,
+    downCount: 0,
+    totalCount: 0,
+  },
+  services: [],
+  incidents: [],
+  maintenance: [],
+}
+
 export type PublicSummaryPayload = {
   status: SummaryState
   checkedAt: string
@@ -62,6 +77,8 @@ export type PublicSummaryPayload = {
   downCount: number
   totalCount: number
 }
+
+export type PublicSnapshotPayload = StatusSnapshot
 
 type PublicServicesPayload = {
   services: ServiceRecord[]
@@ -101,6 +118,12 @@ export async function fetchPublicSummary(
   return fetchJson<PublicSummaryPayload>('/api/public/summary', fetcher)
 }
 
+export async function fetchPublicSnapshot(
+  fetcher: typeof fetch | undefined = globalThis.fetch
+): Promise<PublicSnapshotPayload | null> {
+  return fetchJson<PublicSnapshotPayload>('/api/public/snapshot', fetcher)
+}
+
 async function fetchPublicServices(fetcher: typeof fetch | undefined = globalThis.fetch): Promise<ServiceRecord[] | null> {
   const payload = await fetchJson<PublicServicesPayload>('/api/public/services', fetcher)
   return payload?.services ?? null
@@ -137,6 +160,12 @@ export function mergeSummaryIntoSnapshot(
 }
 
 export async function getStatusSnapshot(fetcher?: typeof fetch): Promise<StatusSnapshot> {
+  const snapshot = await fetchPublicSnapshot(fetcher)
+
+  if (snapshot) {
+    return snapshot
+  }
+
   const [summary, services, incidents, maintenance] = await Promise.all([
     fetchPublicSummary(fetcher),
     fetchPublicServices(fetcher),
@@ -145,19 +174,19 @@ export async function getStatusSnapshot(fetcher?: typeof fetch): Promise<StatusS
   ])
 
   if (!summary && !services && !incidents && !maintenance) {
-    return MOCK_STATUS_SNAPSHOT
+    return EMPTY_STATUS_SNAPSHOT
   }
 
-  const snapshot = summary ? mergeSummaryIntoSnapshot(MOCK_STATUS_SNAPSHOT, summary) : MOCK_STATUS_SNAPSHOT
+  const mergedSnapshot = summary ? mergeSummaryIntoSnapshot(EMPTY_STATUS_SNAPSHOT, summary) : EMPTY_STATUS_SNAPSHOT
 
   return {
-    ...snapshot,
-    services: services ?? snapshot.services,
-    incidents: incidents ?? snapshot.incidents,
-    maintenance: maintenance ?? snapshot.maintenance,
+    ...mergedSnapshot,
+    services: services ?? mergedSnapshot.services,
+    incidents: incidents ?? mergedSnapshot.incidents,
+    maintenance: maintenance ?? mergedSnapshot.maintenance,
   }
 }
 
 export function getInitialStatusSnapshot(): StatusSnapshot {
-  return MOCK_STATUS_SNAPSHOT
+  return EMPTY_STATUS_SNAPSHOT
 }

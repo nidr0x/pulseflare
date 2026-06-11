@@ -40,6 +40,26 @@ describe('worker routing', () => {
     expect(assetsFetchCount).toBe(0)
   })
 
+  it('keeps the public snapshot route on the worker instead of forwarding it to static assets', async () => {
+    let assetsFetchCount = 0
+
+    const response = await worker.fetch(
+      new Request('https://example.com/api/public/snapshot'),
+      {
+        ASSETS: {
+          fetch() {
+            assetsFetchCount += 1
+            return Promise.resolve(new Response('unexpected'))
+          },
+        },
+      } as never,
+      {} as ExecutionContext
+    )
+
+    expect(response.status).toBe(200)
+    expect(assetsFetchCount).toBe(0)
+  })
+
   it('runs scheduled checks through waitUntil', async () => {
     let waitUntilPromise: Promise<unknown> | undefined
 
