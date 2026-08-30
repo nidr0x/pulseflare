@@ -60,11 +60,10 @@ export function ServiceGroupList({ services }: ServiceGroupListProps) {
                   <div className="service-row__top">
                     <div className="service-row__identity">
                       <h4>{service.name}</h4>
-                      <p>{service.target}</p>
                     </div>
                     <div className="service-row__summary">
-                      <strong>{formatUptime(service.uptimePercentage)}</strong>
-                      <span>{service.latencyMs} ms</span>
+                      <strong>{service.uptimePercentage === null ? '--' : formatUptime(service.uptimePercentage)}</strong>
+                      <span>{service.latencyMs === null ? '--' : `${service.latencyMs} ms`}</span>
                       <span className={`service-badge service-badge--${service.status}`}>{formatState(service.status)}</span>
                     </div>
                   </div>
@@ -85,6 +84,7 @@ export function ServiceGroupList({ services }: ServiceGroupListProps) {
           </section>
         ))}
       </div>
+      {services.length === 0 ? <p className="service-row__notes">No services configured yet.</p> : null}
     </section>
   )
 }

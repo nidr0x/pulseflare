@@ -7,14 +7,29 @@ export type PublicServiceStatusRecord = {
   latencyMs: number | null
 }
 
+export type PublicServiceHistoryRecord = {
+  uptimePercentage: number | null
+  history: Array<'up' | 'degraded' | 'down' | 'unknown'>
+}
+
 export type PublicIncidentRecord = {
   id: string
   serviceId: string
   serviceName: string
   status: 'open' | 'resolved'
-  latestReason: string | null
   openedAt: string
   resolvedAt: string | null
+}
+
+export type SchedulerRunRecord = {
+  id: string
+  startedAt: string
+  finishedAt: string | null
+  status: 'running' | 'succeeded' | 'failed'
+  servicesChecked: number
+  upCount: number
+  downCount: number
+  errorMessage: string | null
 }
 
 type D1Row = {
@@ -26,6 +41,12 @@ type D1Row = {
   latest_latency_ms: number | null
 }
 
+type CheckResultD1Row = {
+  service_id: string
+  recorded_at: string
+  status: 'up' | 'down'
+}
+
 type D1Result<T> = {
   results?: T[]
 }
@@ -35,9 +56,19 @@ type IncidentD1Row = {
   service_id: string
   service_name: string
   status: string
-  latest_reason: string | null
   opened_at: string
   resolved_at: string | null
+}
+
+type SchedulerRunD1Row = {
+  id: string
+  started_at: string
+  finished_at: string | null
+  status: string
+  services_checked: number
+  up_count: number
+  down_count: number
+  error_message: string | null
 }
 
 function mapCurrentStatus(currentStatus: string | null): PublicServiceStatusRecord['status'] {
@@ -69,6 +100,7 @@ export async function listPublicServiceStatuses(database: D1Database): Promise<P
       ) AS latest_latency_ms
     FROM services
     LEFT JOIN service_status ON service_status.service_id = services.id
+    WHERE services.is_active = 1
     ORDER BY services.sort_order ASC, services.name ASC
   `)
 
@@ -82,6 +114,85 @@ export async function listPublicServiceStatuses(database: D1Database): Promise<P
     checkedAt: row.checked_at,
     latencyMs: row.latest_latency_ms,
   }))
+}
+
+function getUtcDayKey(value: Date): string {
+  return value.toISOString().slice(0, 10)
+}
+
+function getHistoryDays(now: Date, days: number): string[] {
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  start.setUTCDate(start.getUTCDate() - days + 1)
+
+  return Array.from({ length: days }, (_, index) => {
+    const day = new Date(start)
+    day.setUTCDate(start.getUTCDate() + index)
+    return getUtcDayKey(day)
+  })
+}
+
+export async function getPublicServiceHistory(
+  database: D1Database,
+  now = new Date(),
+  days = 90
+): Promise<Map<string, PublicServiceHistoryRecord>> {
+  const dayKeys = getHistoryDays(now, days)
+  const cutoff = `${dayKeys[0]}T00:00:00.000Z`
+  const result = (await database
+    .prepare(
+      `
+        SELECT service_id, recorded_at, status
+        FROM check_results
+        WHERE recorded_at >= ?
+        ORDER BY recorded_at ASC
+      `
+    )
+    .bind(cutoff)
+    .all()) as D1Result<CheckResultD1Row>
+
+  const grouped = new Map<string, Map<string, { up: number; down: number }>>()
+
+  for (const row of result.results ?? []) {
+    const day = row.recorded_at.slice(0, 10)
+    const serviceDays = grouped.get(row.service_id) ?? new Map<string, { up: number; down: number }>()
+    const counts = serviceDays.get(day) ?? { up: 0, down: 0 }
+    counts[row.status] += 1
+    serviceDays.set(day, counts)
+    grouped.set(row.service_id, serviceDays)
+  }
+
+  return new Map(
+    [...grouped.entries()].map(([serviceId, serviceDays]) => {
+      let successfulChecks = 0
+      let totalChecks = 0
+
+      const history = dayKeys.map((day) => {
+        const counts = serviceDays.get(day)
+
+        if (!counts) {
+          return 'unknown' as const
+        }
+
+        successfulChecks += counts.up
+        totalChecks += counts.up + counts.down
+
+        if (counts.down === 0) {
+          return 'up' as const
+        }
+
+        return counts.up === 0 ? ('down' as const) : ('degraded' as const)
+      })
+
+      return [
+        serviceId,
+        {
+          uptimePercentage:
+            totalChecks > 0 ? Math.round((successfulChecks / totalChecks) * 10000) / 100 : null,
+          history,
+        },
+      ] as const
+    })
+  )
 }
 
 function mapIncidentStatus(status: string): PublicIncidentRecord['status'] {
@@ -99,7 +210,6 @@ export async function listPublicIncidents(database: D1Database): Promise<PublicI
       incidents.service_id,
       services.name AS service_name,
       incidents.status,
-      incidents.latest_reason,
       incidents.opened_at,
       incidents.resolved_at
     FROM incidents
@@ -115,8 +225,39 @@ export async function listPublicIncidents(database: D1Database): Promise<PublicI
     serviceId: row.service_id,
     serviceName: row.service_name,
     status: mapIncidentStatus(row.status),
-    latestReason: row.latest_reason,
     openedAt: row.opened_at,
     resolvedAt: row.resolved_at,
   }))
+}
+
+export async function getLatestSchedulerRun(database: D1Database): Promise<SchedulerRunRecord | null> {
+  const result = (await database
+    .prepare(
+      `
+        SELECT id, started_at, finished_at, status, services_checked, up_count, down_count, error_message
+        FROM scheduler_runs
+        ORDER BY started_at DESC
+        LIMIT 1
+      `
+    )
+    .first<SchedulerRunD1Row>())
+
+  if (!result) {
+    return null
+  }
+
+  if (result.status !== 'running' && result.status !== 'succeeded' && result.status !== 'failed') {
+    throw new Error(`Unexpected scheduler run status value: ${result.status}`)
+  }
+
+  return {
+    id: result.id,
+    startedAt: result.started_at,
+    finishedAt: result.finished_at,
+    status: result.status,
+    servicesChecked: result.services_checked,
+    upCount: result.up_count,
+    downCount: result.down_count,
+    errorMessage: result.error_message,
+  }
 }

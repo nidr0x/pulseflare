@@ -21,6 +21,27 @@ describe('status config', () => {
     expect(parseStatusConfig(config).services).toHaveLength(1)
   })
 
+  it('accepts reliability thresholds and retention settings', () => {
+    const config = defineStatusConfig({
+      site: { name: 'Acme Status' },
+      staleAfterMinutes: 5,
+      retentionDays: 90,
+      services: [
+        {
+          id: 'api',
+          name: 'API',
+          failureThreshold: 2,
+          recoveryThreshold: 2,
+          checks: [{ type: 'http', url: 'https://api.example.com/health' }],
+        },
+      ],
+      notifications: { providers: [] },
+      maintenances: [],
+    })
+
+    expect(parseStatusConfig(config)).toMatchObject({ staleAfterMinutes: 5, retentionDays: 90 })
+  })
+
   it('rejects duplicate service ids', () => {
     expect(() =>
       parseStatusConfig({
@@ -91,6 +112,19 @@ describe('status config', () => {
         maintenances: [],
       })
     ).toThrow(/invalid notification provider 0 type/i)
+  })
+
+  it('rejects non-http notification URLs', () => {
+    expect(() =>
+      parseStatusConfig({
+        site: { name: 'Acme Status' },
+        services: [{ id: 'api', name: 'API', checks: [{ type: 'http', url: 'https://a.dev' }] }],
+        notifications: {
+          providers: [{ id: 'pager', type: 'webhook', url: 'file:///tmp/hook' }],
+        },
+        maintenances: [],
+      })
+    ).toThrow(/invalid notification provider 0 url/i)
   })
 
   it('rejects maintenance service references that do not exist', () => {

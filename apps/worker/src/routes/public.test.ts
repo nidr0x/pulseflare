@@ -12,6 +12,8 @@ afterEach(() => {
 
 describe('/api/public/summary', () => {
   it('summarizes configured services with D1 status when available', async () => {
+    vi.setSystemTime(new Date('2026-04-18T17:02:00.000Z'))
+
     const database = {
       prepare() {
         return {
@@ -71,6 +73,106 @@ describe('/api/public/summary', () => {
   })
 })
 
+describe('/api/public/snapshot', () => {
+  it('returns one canonical payload with persisted history and incidents', async () => {
+    vi.setSystemTime(new Date('2026-04-25T08:05:00.000Z'))
+
+    const database = {
+      prepare(query: string) {
+        if (query.includes('FROM check_results')) {
+          return {
+            bind() {
+              return {
+                async all() {
+                  return {
+                    results: [
+                      { service_id: 'api', recorded_at: '2026-04-25T08:00:00.000Z', status: 'up' },
+                      { service_id: 'api', recorded_at: '2026-04-25T08:01:00.000Z', status: 'down' },
+                    ],
+                  }
+                },
+              }
+            },
+          }
+        }
+
+        if (query.includes('FROM incidents')) {
+          return {
+            async all() {
+              return {
+                results: [
+                  {
+                    id: 'incident-1',
+                    service_id: 'api',
+                    service_name: 'API',
+                    status: 'open',
+                    latest_reason: 'API failed',
+                    opened_at: '2026-04-25T08:00:00.000Z',
+                    resolved_at: null,
+                  },
+                ],
+              }
+            },
+          }
+        }
+
+        return {
+          async all() {
+            return {
+              results: [
+                {
+                  id: 'api',
+                  name: 'API',
+                  service_group: 'Core',
+                  current_status: 'down',
+                  checked_at: '2026-04-25T08:01:00.000Z',
+                  latest_latency_ms: 731,
+                },
+              ],
+            }
+          },
+        }
+      },
+    }
+
+    const response = await worker.fetch(
+      new Request('https://example.com/api/public/snapshot'),
+      {
+        STATUS_CONFIG: {
+          site: { name: 'Acme Status', description: 'System health' },
+          services: [{ id: 'api', name: 'API', checks: [{ type: 'http', url: 'https://api.example.com' }] }],
+          notifications: { providers: [] },
+          maintenances: [],
+        },
+        PULSEFLARE_D1: database,
+      } as never,
+      {} as ExecutionContext
+    )
+    const payload = (await response.json()) as {
+      product: { name: string }
+      summary: { status: string; checkedAt: string }
+      services: Array<{ uptimePercentage: number | null; history: string[] }>
+      incidents: Array<{ id: string; title: string; summary: string }>
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.product.name).toBe('Acme Status')
+    expect(payload.summary).toMatchObject({
+      status: 'degraded',
+      checkedAt: '2026-04-25T08:01:00.000Z',
+    })
+    expect(payload.services[0]).toMatchObject({ uptimePercentage: 50, history: expect.arrayContaining(['degraded']) })
+    expect(payload.incidents).toEqual([
+      expect.objectContaining({
+        id: 'incident-1',
+        title: 'API incident',
+        summary: 'API is experiencing an issue.',
+      }),
+    ])
+    expect(JSON.stringify(payload)).not.toContain('API failed')
+  })
+})
+
 describe('/api/public/services', () => {
   const statusConfig = {
     site: { name: 'Pulseflare' },
@@ -98,7 +200,7 @@ describe('/api/public/services', () => {
       {} as ExecutionContext
     )
     const payload = (await response.json()) as {
-      services: Array<{ id: string; name: string; target: string; status: string; history: string[] }>
+      services: Array<{ id: string; name: string; status: string; history: string[] }>
     }
 
     expect(response.status).toBe(200)
@@ -107,15 +209,37 @@ describe('/api/public/services', () => {
       id: 'api',
       name: 'API',
       group: 'Core',
-      target: 'https://api.example.com/health',
       status: 'unknown',
     })
+    expect(payload.services[0]).not.toHaveProperty('target')
     expect(payload.services[0]?.history).toHaveLength(90)
   })
 
   it('overlays D1 status rows onto configured services', async () => {
+    vi.setSystemTime(new Date('2026-04-18T17:02:00.000Z'))
+
     const database = {
       prepare(query: string) {
+        if (query.includes('FROM check_results')) {
+          return {
+            bind() {
+              return {
+                async all() {
+                  return {
+                    results: [
+                      {
+                        service_id: 'api',
+                        recorded_at: '2026-04-18T17:00:00.000Z',
+                        status: 'down',
+                      },
+                    ],
+                  }
+                },
+              }
+            },
+          }
+        }
+
         expect(query).toContain('LEFT JOIN service_status')
 
         return {
@@ -155,7 +279,7 @@ describe('/api/public/services', () => {
     })
     expect(payload.services.find((service) => service.id === 'blog')).toMatchObject({
       status: 'unknown',
-      uptimePercentage: 100,
+      uptimePercentage: null,
     })
   })
 })
@@ -176,7 +300,7 @@ describe('/api/public/incidents', () => {
                   service_id: 'api',
                   service_name: 'API',
                   status: 'resolved',
-                  latest_reason: 'API recovered',
+                  latest_reason: 'Internal recovery detail',
                   opened_at: '2026-04-18T17:00:00.000Z',
                   resolved_at: '2026-04-18T17:08:00.000Z',
                 },
@@ -201,10 +325,12 @@ describe('/api/public/incidents', () => {
       expect.objectContaining({
         id: 'incident-1',
         title: 'API recovered',
+        summary: 'API has recovered.',
         status: 'resolved',
         services: ['api'],
       }),
     ])
+    expect(JSON.stringify(payload)).not.toContain('Internal recovery detail')
   })
 })
 
@@ -302,5 +428,43 @@ describe('/api/public/maintenance', () => {
     )
 
     await expect(response.json()).resolves.toEqual({ maintenance: [] })
+  })
+})
+
+describe('/api/health', () => {
+  it('returns a failing health response when the scheduler has not completed recently', async () => {
+    vi.setSystemTime(new Date('2026-04-25T08:10:00.000Z'))
+
+    const database = {
+      prepare(query: string) {
+        expect(query).toContain('FROM scheduler_runs')
+        return {
+          async first() {
+            return {
+              id: 'run-1',
+              started_at: '2026-04-25T08:00:00.000Z',
+              finished_at: '2026-04-25T08:01:00.000Z',
+              status: 'succeeded',
+              services_checked: 1,
+              up_count: 1,
+              down_count: 0,
+              error_message: null,
+            }
+          },
+        }
+      },
+    }
+
+    const response = await worker.fetch(
+      new Request('https://example.com/api/health'),
+      {
+        STATUS_CONFIG: { site: { name: 'Pulseflare' }, services: [], notifications: { providers: [] }, maintenances: [] },
+        PULSEFLARE_D1: database,
+      } as never,
+      {} as ExecutionContext
+    )
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toMatchObject({ status: 'degraded' })
   })
 })

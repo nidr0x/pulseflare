@@ -17,16 +17,15 @@ packages/
 
 ## What works today
 
-- Worker entry point with live `/api/public/summary`, `/api/public/services`, `/api/public/incidents`, and `/api/public/maintenance` routes
+- Worker entry point with live `/api/public/snapshot`, `/api/public/summary`, `/api/public/services`, `/api/public/incidents`, and `/api/public/maintenance` routes
 - a protected `/api/install/bootstrap` route that creates the base D1 schema and seeds services from checked-in config
 - a React status site built into Worker static assets
 - schema validation for the config file
-- D1 migration for services, status, incidents, and latency
+- D1 migrations for services, current status, check results, incidents, latency, and notification outbox records
+- bounded scheduled check concurrency, stale-state detection, incident thresholds, and retention cleanup
 - shared summary logic in `@pulseflare/core`
 
-Not wired end-to-end yet:
-
-- notification delivery driven by stored status transitions
+Notification delivery is driven by stored status transitions and retried from the D1 outbox.
 
 ### `apps/worker`
 
@@ -36,7 +35,7 @@ Current behavior:
 - serves a protected install bootstrap route at `/api/install/bootstrap`
 - reads config from the checked-in product config, with env override support if needed
 - serves the built public status app through Worker static assets
-- contains domain and repository modules that are not fully connected to the live request path yet
+- contains the check, incident, notification, persistence, and public API paths
 
 This app should own:
 
@@ -54,7 +53,7 @@ Current behavior:
 
 - overview and incidents routes
 - status page UI
-- API client logic that overlays public API responses onto fallback demo data
+- API client logic that reads the canonical public snapshot and renders an explicit unknown state when live data is unavailable
 
 This app should:
 
@@ -76,32 +75,25 @@ The app shell starts in [`apps/web/src/App.tsx`](../apps/web/src/App.tsx), while
 
 1. Product/site metadata and services are declared in [`config/pulse.config.ts`](../config/pulse.config.ts).
 2. `@pulseflare/schema` can validate that shape and guard against invalid service definitions.
-3. The Worker reads that config during bootstrap and uses it to seed the `services` table.
-4. The frontend bundle is deployed alongside the Worker and overlays public API responses when available.
-
-### Later
-
-1. The Worker loads validated product config for install and runtime behavior.
-2. Declared services drive scheduled checks and incident transitions.
-3. D1-backed records shape public service and incident responses, while config-backed maintenance is normalized into a public response.
-4. The public page renders Worker-owned status data instead of depending on bundled mock content.
+3. The Worker reads that config during bootstrap and scheduled runs and synchronizes active services into D1.
+4. The frontend bundle is deployed alongside the Worker and reads the canonical public snapshot.
 
 ## Request flow
 
 ### Public status
 
-1. A browser requests public API routes under `/api/public/*`.
-2. The Worker returns summary, service, incident, or maintenance payloads from Worker-owned public state.
-3. The web client merges those payloads into the in-memory status snapshot.
-4. React routes render the overview or incidents view with the latest summary state.
+1. A browser requests `/api/public/snapshot`.
+2. The Worker reads current status, persisted check history, incidents, and config-backed maintenance.
+3. The Worker returns one canonical public snapshot with short-lived cache headers.
+4. React routes render the overview or incidents view with that snapshot.
 
 ### First-time install bootstrap
 
-1. An operator opens `/api/install/bootstrap?token=...`.
+1. An operator sends `POST /api/install/bootstrap` with an `Authorization: Bearer <token>` header.
 2. The Worker validates the bootstrap token.
 3. The Worker creates the base D1 tables if they do not already exist.
-4. The Worker seeds `services` from `config/pulse.config.ts` if the install is still empty.
-5. The route returns a small JSON summary describing whether the install was newly created or already initialized.
+4. The Worker synchronizes active services from `config/pulse.config.ts` and archives removed services.
+5. The route returns a small JSON summary describing the synchronization result.
 
 ### Monitoring lifecycle
 
@@ -109,9 +101,10 @@ This is the intended runtime path:
 
 1. Services declare one or more checks in config.
 2. Scheduled Worker runs evaluate HTTP and TCP checks and normalize results.
-3. D1 stores the latest service status, open or resolved incidents, and latency points.
-4. Notification logic will decide whether to emit provider calls for state changes.
-5. Public APIs read from persisted state instead of exposing storage internals directly.
+3. D1 stores the latest service status, every check result, open or resolved incidents, latency points, and notification jobs.
+4. Consecutive failure and recovery thresholds determine incident transitions.
+5. Webhook jobs respect the notification grace period and retry with backoff.
+6. Public APIs read from persisted state instead of exposing storage internals directly.
 
 ## Persistence model
 
@@ -121,6 +114,10 @@ The initial D1 schema in [`apps/worker/migrations/0001_initial.sql`](../apps/wor
 - `service_status`
 - `incidents`
 - `latency_points`
+- `check_results`
+- `notification_outbox`
+- `scheduler_runs`
+- `scheduler_lease`
 
 This keeps public summaries and incident history queryable without relying on one serialized state blob.
 

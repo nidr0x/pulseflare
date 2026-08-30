@@ -2,7 +2,12 @@ import { startTransition, useEffect, useState, type MouseEvent } from 'react'
 
 import { HomePage } from './routes/HomePage'
 import { IncidentsPage } from './routes/IncidentsPage'
-import { getInitialStatusSnapshot, getStatusSnapshot, type StatusSnapshot } from './lib/api'
+import {
+  getInitialStatusSnapshot,
+  getStatusSnapshot,
+  type SnapshotLoadState,
+  type StatusSnapshot,
+} from './lib/api'
 
 type RoutePath = '/' | '/incidents'
 
@@ -17,7 +22,7 @@ function readPathname(): RoutePath {
 export default function App() {
   const [pathname, setPathname] = useState<RoutePath>(readPathname)
   const [snapshot, setSnapshot] = useState<StatusSnapshot>(() => getInitialStatusSnapshot())
-  const [snapshotLoadState, setSnapshotLoadState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [snapshotLoadState, setSnapshotLoadState] = useState<SnapshotLoadState>('idle')
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -32,10 +37,32 @@ export default function App() {
       })
     }
 
+    let timerId: number | undefined
+    let inFlight = false
+    let retryDelay = 10_000
+
+    const scheduleUpdate = (delay: number) => {
+      if (timerId !== undefined) {
+        window.clearTimeout(timerId)
+      }
+
+      timerId = window.setTimeout(() => {
+        timerId = undefined
+        void updateSnapshot()
+      }, delay)
+    }
+
     const updateSnapshot = async () => {
+      if (inFlight) {
+        return
+      }
+
+      inFlight = true
       startTransition(() => {
         setSnapshotLoadState('loading')
       })
+
+      let nextDelay = 30_000
 
       try {
         const nextSnapshot = await getStatusSnapshot()
@@ -48,6 +75,7 @@ export default function App() {
           setSnapshot(nextSnapshot)
           setSnapshotLoadState('ready')
         })
+        retryDelay = 10_000
       } catch {
         if (ignore) {
           return
@@ -56,15 +84,36 @@ export default function App() {
         startTransition(() => {
           setSnapshotLoadState('error')
         })
+        nextDelay = retryDelay
+        retryDelay = Math.min(retryDelay * 2, 60_000)
+      } finally {
+        inFlight = false
+
+        if (!ignore) {
+          scheduleUpdate(nextDelay)
+        }
       }
     }
 
-    updateSnapshot()
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') {
+        return
+      }
+
+      void updateSnapshot()
+    }
+
+    void updateSnapshot()
     window.addEventListener('popstate', handleNavigation)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
       ignore = true
+      if (timerId !== undefined) {
+        window.clearTimeout(timerId)
+      }
       window.removeEventListener('popstate', handleNavigation)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [])
 
@@ -120,7 +169,16 @@ export default function App() {
         className="app-main"
         data-sync-state={snapshotLoadState}
       >
-        {pathname === '/incidents' ? <IncidentsPage snapshot={snapshot} /> : <HomePage snapshot={snapshot} />}
+        {snapshotLoadState === 'error' ? (
+          <p className="sync-notice" role="status">
+            Live status data is unavailable. Retrying automatically.
+          </p>
+        ) : null}
+        {pathname === '/incidents' ? (
+          <IncidentsPage snapshot={snapshot} />
+        ) : (
+          <HomePage snapshot={snapshot} loadState={snapshotLoadState} />
+        )}
       </main>
     </div>
   )

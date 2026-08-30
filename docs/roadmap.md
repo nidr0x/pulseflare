@@ -2,17 +2,23 @@
 
 Pulseflare should stay small: config in code, status data in D1, and deployment through GitHub Actions.
 
+## Completed
+
+- Replace demo UI state with one canonical public snapshot API.
+- Add real uptime history and latency retention from persisted check results.
+- Add thresholded incident transitions and retryable webhook notifications.
+- Harden bootstrap with a POST and Authorization header.
+
 ## Near term
 
-- Replace the remaining demo UI data with API data.
-- Add richer uptime history from persisted status data.
-- Improve first-run deploy errors.
+- Add scheduler run leases and a small internal health or heartbeat signal.
+- Add explicit provider integrations beyond generic webhooks.
+- Improve first-run deploy errors and migration diagnostics.
 
 ## Later
 
 - More status-page branding options.
 - Incident RSS or Atom feeds.
-- Retention settings for latency and history data.
 - Optional external probes for multi-region checks.
 
 ## Non-goals for now

@@ -40,6 +40,7 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PULSEFLARE_BOOTSTRAP_TOKEN: ${{ secrets.PULSEFLARE_BOOTSTRAP_TOKEN }}
       PULSEFLARE_WORKER_NAME: ${{ vars.PULSEFLARE_WORKER_NAME }}
       PULSEFLARE_D1_NAME: ${{ vars.PULSEFLARE_D1_NAME }}
       PULSEFLARE_CHECK_CRON: ${{ vars.PULSEFLARE_CHECK_CRON }}
@@ -78,3 +79,7 @@ jobs:
 
       - name: Deploy Worker
         run: npx wrangler deploy --config apps/worker/wrangler.deploy.toml
+
+      - name: Configure bootstrap secret
+        if: env.PULSEFLARE_BOOTSTRAP_TOKEN != ''
+        run: printf '%s' "$PULSEFLARE_BOOTSTRAP_TOKEN" | npx wrangler secret put PULSEFLARE_BOOTSTRAP_TOKEN --config apps/worker/wrangler.deploy.toml

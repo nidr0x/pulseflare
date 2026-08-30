@@ -1,6 +1,7 @@
 import type { StatusConfig } from '@pulseflare/schema'
 
 export type WorkerEnv = Partial<Env> & {
+  [key: string]: unknown
   ASSETS?: {
     fetch(request: Request): Promise<Response>
   }
@@ -34,6 +35,15 @@ export function getBootstrapToken(env: unknown): string | undefined {
 
   const { PULSEFLARE_BOOTSTRAP_TOKEN } = env as WorkerEnv
   return PULSEFLARE_BOOTSTRAP_TOKEN
+}
+
+export function getWorkerSecret(env: unknown, name: string): string | undefined {
+  if (!env || typeof env !== 'object') {
+    return undefined
+  }
+
+  const value = (env as WorkerEnv)[name]
+  return typeof value === 'string' ? value : undefined
 }
 
 export function getWorkerAssets(env: unknown): WorkerEnv['ASSETS'] | undefined {

@@ -18,8 +18,49 @@ type FetchResultShape = {
   latencyMs?: unknown
 }
 
+const MAX_RESPONSE_BODY_BYTES = 64 * 1024
+
 function formatExpectedStatuses(statuses: number[]): string {
   return statuses.join(', ')
+}
+
+async function readResponseBody(response: Response): Promise<string> {
+  const contentLength = Number(response.headers.get('content-length'))
+
+  if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BODY_BYTES) {
+    throw new Error(`Response body exceeded ${MAX_RESPONSE_BODY_BYTES} byte limit`)
+  }
+
+  if (!response.body) {
+    return ''
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let bytesRead = 0
+  let bodyText = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+
+      if (done) {
+        bodyText += decoder.decode()
+        return bodyText
+      }
+
+      bytesRead += value.byteLength
+
+      if (bytesRead > MAX_RESPONSE_BODY_BYTES) {
+        await reader.cancel().catch(() => undefined)
+        throw new Error(`Response body exceeded ${MAX_RESPONSE_BODY_BYTES} byte limit`)
+      }
+
+      bodyText += decoder.decode(value, { stream: true })
+    }
+  } finally {
+    reader.releaseLock()
+  }
 }
 
 function parseTcpTarget(target: string): { hostname: string; port: number } {
@@ -180,7 +221,6 @@ export async function runConfiguredCheck(
       signal: typeof check.timeoutMs === 'number' ? AbortSignal.timeout(check.timeoutMs) : undefined,
     })
     const latencyMs = Date.now() - startedAt
-    const bodyText = await response.text()
 
     if (check.expect?.status && !check.expect.status.includes(response.status)) {
       return {
@@ -197,6 +237,12 @@ export async function runConfiguredCheck(
         latencyMs,
       }
     }
+
+    const bodyExpectations = [
+      ...(check.expect?.bodyIncludes ?? []),
+      ...(check.expect?.bodyExcludes ?? []),
+    ]
+    const bodyText = bodyExpectations.length > 0 ? await readResponseBody(response) : ''
 
     for (const expectedText of check.expect?.bodyIncludes ?? []) {
       if (!bodyText.includes(expectedText)) {

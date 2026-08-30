@@ -53,6 +53,8 @@ export type StatusService = {
   id: string
   name: string
   group?: string
+  failureThreshold?: number
+  recoveryThreshold?: number
   checks: StatusCheck[]
 }
 
@@ -62,6 +64,9 @@ export type StatusNotificationProvider = {
   url: string
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH'
   headers?: Record<string, string>
+  secretName?: string
+  secretHeader?: string
+  secretPrefix?: string
   bodyTemplate?: Record<string, unknown>
 }
 
@@ -84,6 +89,8 @@ export type StatusConfig = {
   services: StatusService[]
   notifications: StatusNotifications
   maintenances: StatusMaintenance[]
+  staleAfterMinutes?: number
+  retentionDays?: number
 }
 
 export function defineStatusConfig<const T extends StatusConfig>(config: T): T {
@@ -92,6 +99,26 @@ export function defineStatusConfig<const T extends StatusConfig>(config: T): T {
 
 function assertNonEmptyString(value: unknown, label: string): asserts value is string {
   if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`Invalid ${label}`)
+  }
+}
+
+function assertNonNegativeInteger(value: unknown, label: string): asserts value is number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new Error(`Invalid ${label}`)
+  }
+}
+
+function assertPositiveInteger(value: unknown, label: string): asserts value is number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new Error(`Invalid ${label}`)
+  }
+}
+
+function assertHttpUrl(value: unknown, label: string): asserts value is string {
+  assertNonEmptyString(value, label)
+
+  if (!/^https?:\/\/[^\s]+$/i.test(value)) {
     throw new Error(`Invalid ${label}`)
   }
 }
@@ -216,7 +243,7 @@ function assertStatusNavigation(value: unknown, index: number): asserts value is
 function assertStatusProvider(value: unknown, index: number): asserts value is StatusNotificationProvider {
   assertRecord(value, `notification provider ${index}`)
   assertNonEmptyString(value.id, `notification provider ${index} id`)
-  assertNonEmptyString(value.url, `notification provider ${index} url`)
+  assertHttpUrl(value.url, `notification provider ${index} url`)
 
   if (value.type !== 'webhook') {
     throw new Error(`Invalid notification provider ${index} type`)
@@ -230,6 +257,18 @@ function assertStatusProvider(value: unknown, index: number): asserts value is S
 
   if (value.headers !== undefined) {
     assertStringRecord(value.headers, `notification provider ${index} headers`)
+  }
+
+  if (value.secretName !== undefined) {
+    assertNonEmptyString(value.secretName, `notification provider ${index} secretName`)
+  }
+
+  if (value.secretHeader !== undefined) {
+    assertNonEmptyString(value.secretHeader, `notification provider ${index} secretHeader`)
+  }
+
+  if (value.secretPrefix !== undefined && typeof value.secretPrefix !== 'string') {
+    throw new Error(`Invalid notification provider ${index} secretPrefix`)
   }
 
   if (value.bodyTemplate !== undefined) {
@@ -323,6 +362,14 @@ export function parseStatusConfig(config: unknown): StatusConfig {
       assertNonEmptyString(service.group, `service ${service.id} group`)
     }
 
+    if (service.failureThreshold !== undefined) {
+      assertPositiveInteger(service.failureThreshold, `service ${service.id} failure threshold`)
+    }
+
+    if (service.recoveryThreshold !== undefined) {
+      assertPositiveInteger(service.recoveryThreshold, `service ${service.id} recovery threshold`)
+    }
+
     if (!Array.isArray(service.checks) || service.checks.length === 0) {
       throw new Error(`Invalid service ${service.id} checks`)
     }
@@ -342,9 +389,7 @@ export function parseStatusConfig(config: unknown): StatusConfig {
 
   const gracePeriodMinutes = notifications.gracePeriodMinutes
   if (gracePeriodMinutes !== undefined) {
-    if (gracePeriodMinutes === null || typeof gracePeriodMinutes !== 'number' || !Number.isInteger(gracePeriodMinutes) || gracePeriodMinutes < 0) {
-      throw new Error('Invalid notifications grace period')
-    }
+    assertNonNegativeInteger(gracePeriodMinutes, 'notifications grace period')
   }
 
   if (!Array.isArray(notifications.providers)) {
@@ -364,6 +409,14 @@ export function parseStatusConfig(config: unknown): StatusConfig {
 
   for (const [index, maintenance] of maintenances.entries()) {
     assertStatusMaintenance(maintenance, index, knownServiceIds)
+  }
+
+  if (config.staleAfterMinutes !== undefined) {
+    assertPositiveInteger(config.staleAfterMinutes, 'stale after minutes')
+  }
+
+  if (config.retentionDays !== undefined) {
+    assertPositiveInteger(config.retentionDays, 'retention days')
   }
 
   return config as StatusConfig

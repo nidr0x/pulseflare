@@ -44,6 +44,7 @@ Add:
 
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
+- `PULSEFLARE_BOOTSTRAP_TOKEN` if you want to run the protected bootstrap endpoint after deployment
 
 ## Enable deployment
 
@@ -76,6 +77,19 @@ The first deploy:
 - apply migrations from `apps/worker/migrations`
 - deploy the Worker from `apps/worker`
 - serve the web UI from `apps/web/dist` as Worker static assets
+
+If `PULSEFLARE_BOOTSTRAP_TOKEN` is set, the workflow stores it as a Worker
+secret after deployment. Bootstrap with a `POST` request and an authorization
+header:
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer $PULSEFLARE_BOOTSTRAP_TOKEN" \
+  https://status.example.com/api/install/bootstrap
+```
+
+Webhook secrets referenced by `secretName` must also be added as Worker
+secrets. Keep those values out of `pulse.config.ts` and Git history.
 
 ## Troubleshooting
 

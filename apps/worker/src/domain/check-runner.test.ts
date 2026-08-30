@@ -70,6 +70,43 @@ describe('runConfiguredCheck', () => {
     })
   })
 
+  it('does not consume the response body when no body assertion is configured', async () => {
+    const response = new Response('unused', { status: 200 })
+    const bodyReader = vi.spyOn(response, 'text')
+    const fetcher = vi.fn(async () => response)
+
+    await expect(
+      runConfiguredCheck(
+        {
+          type: 'http',
+          url: 'https://api.example.com/health',
+          expect: { status: [200] },
+        },
+        fetcher
+      )
+    ).resolves.toMatchObject({ status: 'up' })
+
+    expect(bodyReader).not.toHaveBeenCalled()
+  })
+
+  it('fails safely when an asserted response body exceeds the memory limit', async () => {
+    const fetcher = vi.fn(async () => new Response('x'.repeat(64 * 1024 + 1), { status: 200 }))
+
+    await expect(
+      runConfiguredCheck(
+        {
+          type: 'http',
+          url: 'https://api.example.com/health',
+          expect: { bodyIncludes: ['ok'] },
+        },
+        fetcher
+      )
+    ).resolves.toMatchObject({
+      status: 'down',
+      reason: 'Response body exceeded 65536 byte limit',
+    })
+  })
+
   it('marks a TCP check as up when the socket opens successfully', async () => {
     const connectMock = vi.fn(() => ({
       opened: Promise.resolve({ remoteAddress: '203.0.113.10', localAddress: '198.51.100.5' }),

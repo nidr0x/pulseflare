@@ -44,6 +44,8 @@ Each service includes:
 - `id`: required stable identifier
 - `name`: required display name
 - `group`: optional visual grouping label
+- `failureThreshold`: optional consecutive failures required to open an incident; defaults to `2`
+- `recoveryThreshold`: optional consecutive successes required to resolve an incident; defaults to `2`
 - `checks`: one or more monitoring checks
 
 Duplicate service ids are rejected during parsing.
@@ -61,7 +63,11 @@ Supported provider shape:
 - `url`
 - optional `method`
 - optional `headers`
+- optional `secretName`, `secretHeader`, and `secretPrefix` for a Worker secret binding
 - optional `bodyTemplate`
+
+At the top level, `staleAfterMinutes` controls when the public page stops treating
+the latest check as current, and `retentionDays` controls historical D1 cleanup.
 
 ### `maintenances`
 
@@ -213,9 +219,9 @@ export default defineStatusConfig({
         type: 'webhook',
         url: 'https://hooks.acme.dev/status',
         method: 'POST',
-        headers: {
-          authorization: 'Bearer ${STATUS_WEBHOOK_TOKEN}',
-        },
+        secretName: 'STATUS_WEBHOOK_TOKEN',
+        secretHeader: 'authorization',
+        secretPrefix: 'Bearer ',
         bodyTemplate: {
           source: 'pulseflare',
         },
@@ -258,4 +264,12 @@ Today:
 - notification grace periods delay incident opening and webhook delivery until sustained failure is confirmed
 - active maintenance windows suppress incident-open notifications for affected services
 - the Worker exposes public summary, services, incidents, and maintenance routes
-- the web app overlays public API responses onto bundled fallback data
+- the web app reads one canonical `/api/public/snapshot` response and uses an empty unknown state when it is unavailable
+- scheduled checks persist every result and calculate real 90-day history from D1
+- incidents require configurable consecutive failures and recoveries
+- webhook notifications are queued in D1 and retried asynchronously
+
+Later:
+
+- notification delivery providers can be expanded beyond generic webhooks
+- optional external probes can add multi-region evidence
