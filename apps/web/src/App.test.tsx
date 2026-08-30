@@ -11,17 +11,16 @@ describe('App', () => {
   it('renders the simplified public status layout', () => {
     const html = renderToStaticMarkup(<App />)
 
-    expect(html).toContain('All systems operational')
+    expect(html).toContain('Checking current status')
     expect(html).toContain('Uptime over the last 90 days')
-    expect(html).toContain('Operational')
+    expect(html).toContain('No services reported yet')
   })
 
   it('renders the status page without the incident timeline', () => {
     const html = renderToStaticMarkup(<HomePage snapshot={getInitialStatusSnapshot()} />)
 
     expect(html).toContain('Uptime over the last 90 days')
-    expect(html).toContain('Upcoming maintenance')
-    expect(html).toContain('Core platform')
+    expect(html).toContain('No services configured yet.')
     expect(html).not.toContain('Incident log')
     expect(html).not.toContain('Recent incidents')
   })
@@ -40,11 +39,30 @@ describe('App', () => {
   })
 
   it('filters timeline entries by selected service id', () => {
-    const snapshot = getInitialStatusSnapshot()
+    const incidents = [
+      {
+        id: 'incident-1',
+        title: 'Alert delivery delays',
+        status: 'monitoring' as const,
+        impact: 'minor' as const,
+        startedAt: '2026-04-18T14:05:00.000Z',
+        summary: 'Delivery times are elevated.',
+        services: ['alerts-pipeline'],
+      },
+      {
+        id: 'incident-2',
+        title: 'API outage',
+        status: 'resolved' as const,
+        impact: 'major' as const,
+        startedAt: '2026-04-17T08:12:00.000Z',
+        summary: 'The API has recovered.',
+        services: ['edge-api'],
+      },
+    ]
 
-    expect(filterEntriesByService(snapshot.incidents, 'alerts-pipeline')).toHaveLength(1)
-    expect(filterEntriesByService(snapshot.incidents, 'edge-api')).toHaveLength(1)
-    expect(filterEntriesByService(snapshot.incidents, 'all')).toHaveLength(snapshot.incidents.length)
+    expect(filterEntriesByService(incidents, 'alerts-pipeline')).toHaveLength(1)
+    expect(filterEntriesByService(incidents, 'edge-api')).toHaveLength(1)
+    expect(filterEntriesByService(incidents, 'all')).toHaveLength(incidents.length)
   })
 
   it('merges incidents and maintenance into one chronological timeline view', () => {
@@ -105,22 +123,25 @@ describe('App', () => {
     expect(next.incidents).toBe(snapshot.incidents)
   })
 
-  it('hydrates services and incidents from public API payloads', async () => {
+  it('hydrates the full snapshot from the canonical public API payload', async () => {
     const fetcher = (async (url: string) => {
       const payloads = {
-        '/api/public/summary': {
-          status: 'degraded',
-          checkedAt: '2026-04-19T08:15:00.000Z',
-          upCount: 1,
-          downCount: 1,
-          totalCount: 2,
-        },
-        '/api/public/services': {
+        '/api/public/snapshot': {
+          product: {
+            name: 'Acme Status',
+            description: 'System health and incident reporting',
+          },
+          summary: {
+            status: 'degraded',
+            checkedAt: '2026-04-19T08:15:00.000Z',
+            upCount: 1,
+            downCount: 1,
+            totalCount: 2,
+          },
           services: [
             {
               id: 'api',
               name: 'API',
-              target: 'https://api.example.com/health',
               status: 'outage',
               uptimePercentage: 0,
               latencyMs: 0,
@@ -128,8 +149,6 @@ describe('App', () => {
               notes: 'Last checked 2026-04-19T08:15:00.000Z',
             },
           ],
-        },
-        '/api/public/incidents': {
           incidents: [
             {
               id: 'incident-1',
@@ -141,8 +160,6 @@ describe('App', () => {
               services: ['api'],
             },
           ],
-        },
-        '/api/public/maintenance': {
           maintenance: [
             {
               id: 'maintenance-1',
@@ -165,6 +182,10 @@ describe('App', () => {
 
     const snapshot = await getStatusSnapshot(fetcher)
 
+    expect(snapshot.product).toEqual({
+      name: 'Acme Status',
+      description: 'System health and incident reporting',
+    })
     expect(snapshot.summary.status).toBe('degraded')
     expect(snapshot.services).toEqual([
       expect.objectContaining({ id: 'api', name: 'API', status: 'outage' }),
@@ -175,5 +196,18 @@ describe('App', () => {
     expect(snapshot.maintenance).toEqual([
       expect.objectContaining({ id: 'maintenance-1', title: 'Redis upgrade', status: 'scheduled' }),
     ])
+  })
+
+  it('keeps API failures distinct from an empty snapshot', async () => {
+    const fetcher = (async () => new Response(null, { status: 503 })) as typeof fetch
+
+    await expect(getStatusSnapshot(fetcher)).rejects.toThrow('Status snapshot unavailable')
+  })
+
+  it('renders the live-data unavailable state', () => {
+    const html = renderToStaticMarkup(<HomePage snapshot={getInitialStatusSnapshot()} loadState="error" />)
+
+    expect(html).toContain('Live status unavailable')
+    expect(html).toContain('Retrying automatically')
   })
 })

@@ -16,6 +16,8 @@ type StatusRow = {
   latest_reason: string | null
   checked_at: string
   failing_since?: string | null
+  failure_count: number
+  recovery_count: number
 }
 
 type IncidentRow = {
@@ -31,12 +33,16 @@ function createFakeDatabase(initial?: {
   services?: ServiceRow[]
   statuses?: StatusRow[]
   incidents?: IncidentRow[]
+  forceIncidentConflict?: boolean
 }) {
   const state = {
     services: initial?.services ?? [],
     statuses: initial?.statuses ?? [],
     incidents: initial?.incidents ?? [],
+    notifications: [] as Array<Record<string, unknown>>,
     latencyWrites: [] as Array<{ serviceId: string; latencyMs: number; recordedAt: string }>,
+    batchCalls: [] as number[],
+    forceIncidentConflict: initial?.forceIncidentConflict ?? false,
   }
 
   const database = {
@@ -47,7 +53,41 @@ function createFakeDatabase(initial?: {
       return {
         bind(...args: unknown[]) {
           return {
+            async all() {
+              return { results: query.includes('FROM notification_outbox') ? state.notifications : [] }
+            },
             async run() {
+              if (query.includes('INSERT INTO notification_outbox')) {
+                const [id, providerId, event, incidentId, serviceId, payloadJson] = args as [
+                  string,
+                  string,
+                  string,
+                  string,
+                  string,
+                  string,
+                ]
+                if (!state.notifications.some((row) => row.incident_id === incidentId && row.provider_id === providerId && row.event === event)) {
+                  state.notifications.push({
+                    id,
+                    provider_id: providerId,
+                    event,
+                    incident_id: incidentId,
+                    service_id: serviceId,
+                    payload_json: payloadJson,
+                    attempts: 0,
+                  })
+                }
+                return
+              }
+
+              if (query.includes('SET claimed_by = ?, claimed_until = ?')) {
+                return { meta: { changes: 1 } }
+              }
+
+              if (query.includes('UPDATE services SET is_active = 0')) {
+                return
+              }
+
               if (query.includes('INSERT INTO services') && query.includes('ON CONFLICT(id) DO UPDATE')) {
                 const [id, name, group, sortOrder] = args as [string, string, string | null, number]
                 const existing = state.services.find((service) => service.id === id)
@@ -67,12 +107,14 @@ function createFakeDatabase(initial?: {
               }
 
               if (query.includes('INSERT INTO service_status') && query.includes('ON CONFLICT(service_id)')) {
-                const [serviceId, status, latestReason, checkedAt, failingSince] = args as [
+                const [serviceId, status, latestReason, checkedAt, failingSince, failureCount, recoveryCount] = args as [
                   string,
                   'up' | 'down',
                   string | null,
                   string,
                   string | null,
+                  number,
+                  number,
                 ]
                 const row = state.statuses.find((entry) => entry.service_id === serviceId)
                 if (row) {
@@ -80,6 +122,8 @@ function createFakeDatabase(initial?: {
                   row.latest_reason = latestReason
                   row.checked_at = checkedAt
                   row.failing_since = failingSince
+                  row.failure_count = failureCount
+                  row.recovery_count = recoveryCount
                 } else {
                   state.statuses.push({
                     service_id: serviceId,
@@ -87,8 +131,14 @@ function createFakeDatabase(initial?: {
                     latest_reason: latestReason,
                     checked_at: checkedAt,
                     failing_since: failingSince,
+                    failure_count: failureCount,
+                    recovery_count: recoveryCount,
                   })
                 }
+                return
+              }
+
+              if (query.includes('INSERT INTO check_results')) {
                 return
               }
 
@@ -106,6 +156,28 @@ function createFakeDatabase(initial?: {
                   string | null,
                   string,
                 ]
+                if (state.forceIncidentConflict) {
+                  state.forceIncidentConflict = false
+                  state.incidents.push({
+                    id: 'existing-incident',
+                    service_id: serviceId,
+                    status: 'open',
+                    latest_reason: 'Internal failure detail',
+                    opened_at: openedAt,
+                    resolved_at: null,
+                  })
+
+                  if (!query.includes('ON CONFLICT DO NOTHING')) {
+                    throw new Error('Expected conflict-safe incident insert')
+                  }
+
+                  return
+                }
+
+                if (state.incidents.some((entry) => entry.service_id === serviceId && entry.status === 'open')) {
+                  return
+                }
+
                 state.incidents.push({
                   id,
                   service_id: serviceId,
@@ -128,6 +200,10 @@ function createFakeDatabase(initial?: {
                   incident.resolved_at = resolvedAt
                 }
               }
+
+              if (query.includes('DELETE FROM check_results') || query.includes('DELETE FROM latency_points')) {
+                return
+              }
             },
             async first() {
               if (query.includes('SELECT COUNT(*) AS service_count FROM services')) {
@@ -145,7 +221,7 @@ function createFakeDatabase(initial?: {
                   : null
               }
 
-              if (query.includes('FROM service_status') && query.includes('failing_since')) {
+              if (query.includes('FROM service_status')) {
                 const [serviceId] = args as [string]
                 const row = state.statuses.find((entry) => entry.service_id === serviceId)
 
@@ -154,6 +230,8 @@ function createFakeDatabase(initial?: {
                       current_status: row.current_status,
                       checked_at: row.checked_at,
                       failing_since: row.failing_since ?? null,
+                      failure_count: row.failure_count,
+                      recovery_count: row.recovery_count,
                     }
                   : null
               }
@@ -163,6 +241,15 @@ function createFakeDatabase(initial?: {
           }
         },
       }
+    },
+    async batch(statements: Array<{ run: () => Promise<unknown> }>) {
+      state.batchCalls.push(statements.length)
+
+      for (const statement of statements) {
+        await statement.run()
+      }
+
+      return []
     },
   } as unknown as D1Database
 
@@ -187,6 +274,8 @@ describe('runScheduledChecks', () => {
             {
               id: 'api',
               name: 'API',
+            failureThreshold: 1,
+            recoveryThreshold: 1,
               checks: [{ type: 'http', url: 'https://api.example.com/health' }],
             },
           ],
@@ -211,9 +300,12 @@ describe('runScheduledChecks', () => {
         latest_reason: 'GET https://api.example.com/health -> 200',
         checked_at: '2026-04-25T08:00:00.000Z',
         failing_since: null,
+        failure_count: 0,
+        recovery_count: 1,
       },
     ])
     expect(state.latencyWrites).toHaveLength(1)
+    expect(state.batchCalls).toEqual([2, 3])
   })
 
   it('opens and then resolves incidents as service state changes', async () => {
@@ -228,6 +320,8 @@ describe('runScheduledChecks', () => {
             {
               id: 'api',
               name: 'API',
+              failureThreshold: 1,
+              recoveryThreshold: 1,
               checks: [{ type: 'http', url: 'https://api.example.com/health' }],
             },
           ],
@@ -254,6 +348,8 @@ describe('runScheduledChecks', () => {
             {
               id: 'api',
               name: 'API',
+              failureThreshold: 1,
+              recoveryThreshold: 1,
               checks: [{ type: 'http', url: 'https://api.example.com/health' }],
             },
           ],
@@ -270,6 +366,68 @@ describe('runScheduledChecks', () => {
       status: 'resolved',
       resolved_at: '2026-04-25T08:05:00.000Z',
     })
+  })
+
+  it('reuses the incident created by a concurrent open operation', async () => {
+    const { database, state } = createFakeDatabase({ forceIncidentConflict: true })
+
+    await runScheduledChecks(
+      {
+        PULSEFLARE_D1: database,
+        STATUS_CONFIG: {
+          site: { name: 'Pulseflare' },
+          services: [
+            {
+              id: 'api',
+              name: 'API',
+              failureThreshold: 1,
+              recoveryThreshold: 1,
+              checks: [{ type: 'http', url: 'https://api.example.com/health' }],
+            },
+          ],
+          notifications: { providers: [] },
+          maintenances: [],
+        },
+      },
+      async () => new Response('down', { status: 503 }),
+      '2026-04-25T08:02:00.000Z'
+    )
+
+    expect(state.incidents).toHaveLength(1)
+    expect(state.incidents[0]?.id).toBe('existing-incident')
+  })
+
+  it('waits for consecutive failures and recoveries before changing incident state', async () => {
+    const { database, state } = createFakeDatabase()
+    const statusConfig = {
+      site: { name: 'Pulseflare' },
+      services: [
+        {
+          id: 'api',
+          name: 'API',
+          failureThreshold: 2,
+          recoveryThreshold: 2,
+          checks: [{ type: 'http' as const, url: 'https://api.example.com/health' }],
+        },
+      ],
+      notifications: { providers: [] },
+      maintenances: [],
+    }
+
+    const run = (response: Response, checkedAt: string) =>
+      runScheduledChecks({ PULSEFLARE_D1: database, STATUS_CONFIG: statusConfig }, async () => response, checkedAt)
+
+    await run(new Response('down', { status: 503 }), '2026-04-25T09:00:00.000Z')
+    expect(state.incidents).toHaveLength(0)
+
+    await run(new Response('down', { status: 503 }), '2026-04-25T09:01:00.000Z')
+    expect(state.incidents).toHaveLength(1)
+
+    await run(new Response('ok', { status: 200 }), '2026-04-25T09:02:00.000Z')
+    expect(state.incidents[0]?.status).toBe('open')
+
+    await run(new Response('ok', { status: 200 }), '2026-04-25T09:03:00.000Z')
+    expect(state.incidents[0]?.status).toBe('resolved')
   })
 
   it('persists a configured TCP check through the scheduled runner', async () => {
@@ -329,6 +487,8 @@ describe('runScheduledChecks', () => {
           {
             id: 'api',
             name: 'API',
+            failureThreshold: 1,
+            recoveryThreshold: 1,
             checks: [{ type: 'http', url: 'https://api.example.com/health' }],
           },
         ],
@@ -367,6 +527,8 @@ describe('runScheduledChecks', () => {
           {
             id: 'api',
             name: 'API',
+            failureThreshold: 1,
+            recoveryThreshold: 1,
             checks: [{ type: 'http', url: 'https://api.example.com/health' }],
           },
         ],

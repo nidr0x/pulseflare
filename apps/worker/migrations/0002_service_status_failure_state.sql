@@ -1,1 +1,1 @@
-ALTER TABLE service_status ADD COLUMN failing_since TEXT;
+-- failing_since is part of 0001_initial.sql; retain this migration for existing history.

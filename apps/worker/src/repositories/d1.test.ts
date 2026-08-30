@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { listPublicServiceStatuses } from './d1'
+import { getPublicServiceHistory, listPublicServiceStatuses } from './d1'
 
 describe('listPublicServiceStatuses', () => {
   it('preserves missing status rows instead of treating them as healthy', async () => {
@@ -98,5 +98,42 @@ describe('listPublicServiceStatuses', () => {
     await expect(listPublicServiceStatuses(database)).rejects.toThrow(
       'Unexpected service status value: degraded'
     )
+  })
+})
+
+describe('getPublicServiceHistory', () => {
+  it('aggregates persisted check results into daily windows and uptime', async () => {
+    const database = {
+      prepare(query: string) {
+        expect(query).toContain('FROM check_results')
+
+        return {
+          bind() {
+            return {
+              async all() {
+                return {
+                  results: [
+                    { service_id: 'api', recorded_at: '2026-04-25T08:00:00.000Z', status: 'up' },
+                    { service_id: 'api', recorded_at: '2026-04-25T08:01:00.000Z', status: 'down' },
+                    { service_id: 'api', recorded_at: '2026-04-24T08:00:00.000Z', status: 'up' },
+                  ],
+                }
+              },
+            }
+          },
+        }
+      },
+    } as unknown as D1Database
+
+    const history = await getPublicServiceHistory(
+      database,
+      new Date('2026-04-25T12:00:00.000Z'),
+      2
+    )
+
+    expect(history.get('api')).toEqual({
+      uptimePercentage: 66.67,
+      history: ['up', 'degraded'],
+    })
   })
 })

@@ -56,6 +56,7 @@ In your GitHub repo, add:
 
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
+- `PULSEFLARE_BOOTSTRAP_TOKEN` if you want to use the protected bootstrap endpoint
 
 Optional GitHub repository variables:
 
@@ -127,6 +128,7 @@ In the repo:
 - checked-in config schema in [`config/pulse.config.ts`](config/pulse.config.ts)
 - Worker routes
 - D1 migrations
+- canonical `/api/public/snapshot` API backed by live Worker state
 - public summary API
 - public services API backed by config and D1 state
 - public incidents API backed by D1 state
@@ -135,9 +137,14 @@ In the repo:
 - remote `region` and `proxy` probe execution
 - D1-backed service status and incident transitions
 - webhook notifications with grace-period handling
+- persisted check history, uptime calculations, stale-state detection, and retention cleanup
+- thresholded incident transitions with retryable webhook delivery
 - public status UI bundled into the Worker deployment
 - GitHub Actions deployment flow
 
+The bootstrap endpoint accepts `POST /api/install/bootstrap` with an
+`Authorization: Bearer <token>` header. Do not put the token in a URL query
+parameter.
 ## Config example
 
 ```ts
@@ -162,6 +169,8 @@ export default defineStatusConfig({
       id: 'api',
       name: 'Public API',
       group: 'Core Platform',
+      failureThreshold: 2,
+      recoveryThreshold: 2,
       checks: [
         {
           type: 'http',
@@ -197,6 +206,8 @@ export default defineStatusConfig({
       },
     ],
   },
+  staleAfterMinutes: 5,
+  retentionDays: 90,
   maintenances: [],
 })
 ```

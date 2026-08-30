@@ -29,6 +29,10 @@ class FakePreparedStatement {
   }
 
   async run(): Promise<Record<string, unknown>> {
+    if (this.sql.includes('UPDATE services SET is_active = 0')) {
+      return {}
+    }
+
     if (this.sql.includes('INSERT INTO services') && this.sql.includes('ON CONFLICT(id) DO UPDATE')) {
       const [id, name, group, sortOrder] = this.params as [string, string, string | null, number]
       const existing = this.database.services.find((service) => service.id === id)
@@ -55,6 +59,7 @@ class FakePreparedStatement {
 
 class FakeD1Database {
   public execCalls: string[] = []
+  public batchCalls = 0
   public services: ServiceRow[] = []
 
   exec(sql: string): Promise<Record<string, unknown>> {
@@ -65,6 +70,16 @@ class FakeD1Database {
   prepare(sql: string): FakePreparedStatement {
     return new FakePreparedStatement(this, sql)
   }
+
+  async batch(statements: FakePreparedStatement[]): Promise<Record<string, unknown>[]> {
+    this.batchCalls += 1
+
+    for (const statement of statements) {
+      await statement.run()
+    }
+
+    return []
+  }
 }
 
 describe('/api/install/bootstrap', () => {
@@ -72,7 +87,10 @@ describe('/api/install/bootstrap', () => {
     const database = new FakeD1Database()
 
     const response = await worker.fetch(
-      new Request('https://example.com/api/install/bootstrap?token=wrong'),
+      new Request('https://example.com/api/install/bootstrap', {
+        method: 'POST',
+        headers: { authorization: 'Bearer wrong' },
+      }),
       {
         PULSEFLARE_D1: database,
         PULSEFLARE_BOOTSTRAP_TOKEN: 'secret',
@@ -95,7 +113,10 @@ describe('/api/install/bootstrap', () => {
     const database = new FakeD1Database()
 
     const response = await worker.fetch(
-      new Request('https://example.com/api/install/bootstrap?token=secret'),
+      new Request('https://example.com/api/install/bootstrap', {
+        method: 'POST',
+        headers: { authorization: 'Bearer secret' },
+      }),
       {
         PULSEFLARE_D1: database,
         PULSEFLARE_BOOTSTRAP_TOKEN: 'secret',
@@ -132,6 +153,7 @@ describe('/api/install/bootstrap', () => {
     expect(payload.seededServices).toBe(2)
     expect(payload.totalServices).toBe(2)
     expect(database.execCalls).toHaveLength(1)
+    expect(database.batchCalls).toBe(1)
     expect(database.services).toEqual([
       {
         id: 'api',
@@ -158,7 +180,10 @@ describe('/api/install/bootstrap', () => {
     })
 
     const response = await worker.fetch(
-      new Request('https://example.com/api/install/bootstrap?token=secret'),
+      new Request('https://example.com/api/install/bootstrap', {
+        method: 'POST',
+        headers: { authorization: 'Bearer secret' },
+      }),
       {
         PULSEFLARE_D1: database,
         PULSEFLARE_BOOTSTRAP_TOKEN: 'secret',

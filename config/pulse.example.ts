@@ -19,6 +19,8 @@ export default defineStatusConfig({
       id: 'api',
       name: 'Public API',
       group: 'Core platform',
+      failureThreshold: 2,
+      recoveryThreshold: 2,
       checks: [
         {
           type: 'http',
@@ -53,6 +55,9 @@ export default defineStatusConfig({
         type: 'webhook',
         url: 'https://hooks.example.com/pulseflare',
         method: 'POST',
+        secretName: 'STATUS_WEBHOOK_TOKEN',
+        secretHeader: 'authorization',
+        secretPrefix: 'Bearer ',
       },
     ],
   },
@@ -66,4 +71,6 @@ export default defineStatusConfig({
       services: ['api'],
     },
   ],
+  staleAfterMinutes: 5,
+  retentionDays: 90,
 })

@@ -72,6 +72,13 @@ describe('worker routing', () => {
               },
             }
           },
+          async batch(statements: Array<{ run: () => Promise<unknown> }>) {
+            for (const statement of statements) {
+              await statement.run()
+            }
+
+            return []
+          },
         },
         STATUS_CONFIG: {
           site: { name: 'Pulseflare' },
