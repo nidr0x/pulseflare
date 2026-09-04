@@ -17,6 +17,8 @@ describe('worker routing', () => {
     )
 
     expect(response.status).toBe(200)
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(response.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin')
     await expect(response.text()).resolves.toContain('<html>/</html>')
   })
 
@@ -37,6 +39,8 @@ describe('worker routing', () => {
     )
 
     expect(response.status).toBe(200)
+    expect(response.headers.get('content-security-policy')).toContain("default-src 'self'")
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
     expect(assetsFetchCount).toBe(0)
   })
 

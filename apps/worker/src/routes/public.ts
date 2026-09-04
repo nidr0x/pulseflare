@@ -73,6 +73,7 @@ function buildSummaryPayload(
     downCount,
     totalCount,
     checkedAt: getLatestCheckedAt([...statuses.values()]),
+    staleAfterMinutes,
   }
 }
 
@@ -134,6 +135,7 @@ function buildServicePayload(
     uptimePercentage: historyRecord?.uptimePercentage ?? null,
     latencyMs: statusRecord?.latencyMs ?? null,
     history: historyRecord?.history ?? Array.from({ length: HISTORY_WINDOW_DAYS }, () => 'unknown' as const),
+    locations: historyRecord?.locations ?? [],
     notes: getServiceNotes(service, status, statusRecord?.checkedAt, stale),
   }
 }

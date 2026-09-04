@@ -8,7 +8,8 @@
   ],
   "scripts": {
     "build": "npm run build --workspace @pulseflare/web && npx tsc -b tsconfig.json --force --pretty false",
-    "test": "npm run test --workspaces && node --test .github/scripts/resolve-cloudflare-resources.test.mjs .github/scripts/render-deploy-wrangler-config.test.mjs",
+    "test": "npm run test --workspaces && node --test .github/scripts/resolve-cloudflare-resources.test.mjs .github/scripts/render-deploy-wrangler-config.test.mjs .github/scripts/smoke-test.test.mjs && npm run test:integration",
+    "test:integration": "node --test .github/scripts/d1-migrations.test.mjs",
     "lint": "npm run lint --workspaces",
     "dev:web": "npm run dev --workspace @pulseflare/web",
     "dev:worker": "npm run dev --workspace @pulseflare/worker"

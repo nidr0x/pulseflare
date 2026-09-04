@@ -1,6 +1,6 @@
 # Architecture
 
-Pulseflare deploys as one Cloudflare Worker by default. The Worker serves the public status page assets and the `/api/*` routes.
+Pulseflare uses one Cloudflare Worker by default. The Worker serves the public status page assets and the `/api/*` routes.
 
 ## Repository layout
 
@@ -15,21 +15,21 @@ packages/
   schema/
 ```
 
-## What works today
+## Current pieces
 
-- Worker entry point with live `/api/public/snapshot`, `/api/public/summary`, `/api/public/services`, `/api/public/incidents`, and `/api/public/maintenance` routes
+- a Worker entry point with live `/api/public/snapshot`, `/api/public/summary`, `/api/public/services`, `/api/public/incidents`, `/api/public/maintenance`, and `/api/health` routes
 - a protected `/api/install/bootstrap` route that creates the base D1 schema and seeds services from checked-in config
 - a React status site built into Worker static assets
-- schema validation for the config file
-- D1 migrations for services, current status, check results, incidents, latency, and notification outbox records
+- config-file schema validation
+- D1 migrations for services, current status, location-aware check results, incidents, latency, and notification outbox records
 - bounded scheduled check concurrency, stale-state detection, incident thresholds, and retention cleanup
 - shared summary logic in `@pulseflare/core`
 
-Notification delivery is driven by stored status transitions and retried from the D1 outbox.
+Stored status transitions create notification jobs. The Worker retries those jobs from the D1 outbox.
 
 ### `apps/worker`
 
-Current behavior:
+The Worker:
 
 - serves `/api/public/summary`
 - serves a protected install bootstrap route at `/api/install/bootstrap`
@@ -37,7 +37,7 @@ Current behavior:
 - serves the built public status app through Worker static assets
 - contains the check, incident, notification, persistence, and public API paths
 
-This app should own:
+It owns:
 
 - public status APIs
 - config ingestion
@@ -49,15 +49,15 @@ Public traffic enters through [`apps/worker/src/index.ts`](../apps/worker/src/in
 
 ### `apps/web`
 
-Current behavior:
+The web app:
 
 - overview and incidents routes
 - status page UI
 - API client logic that reads the canonical public snapshot and renders an explicit unknown state when live data is unavailable
 
-This app should:
+It:
 
-- produce the static frontend bundle that is served by the Worker without requiring a separate Pages project
+- produces the static frontend bundle that is served by the Worker without requiring a separate Pages project
 
 The app shell starts in [`apps/web/src/App.tsx`](../apps/web/src/App.tsx), while data-fetching helpers live in [`apps/web/src/lib/api.ts`](../apps/web/src/lib/api.ts).
 
@@ -67,15 +67,13 @@ The app shell starts in [`apps/web/src/App.tsx`](../apps/web/src/App.tsx), while
 
 ### `packages/core`
 
-`@pulseflare/core` holds domain helpers that should not depend on Cloudflare runtime APIs. The current example is summary aggregation in [`packages/core/src/status-summary.ts`](../packages/core/src/status-summary.ts).
+`@pulseflare/core` holds domain helpers that do not depend on Cloudflare runtime APIs. The current example is summary aggregation in [`packages/core/src/status-summary.ts`](../packages/core/src/status-summary.ts).
 
 ## Config flow
 
-### Today
-
-1. Product/site metadata and services are declared in [`config/pulse.config.ts`](../config/pulse.config.ts).
-2. `@pulseflare/schema` can validate that shape and guard against invalid service definitions.
-3. The Worker reads that config during bootstrap and scheduled runs and synchronizes active services into D1.
+1. Product metadata and services are declared in [`config/pulse.config.ts`](../config/pulse.config.ts).
+2. `@pulseflare/schema` validates the shape and rejects invalid service definitions.
+3. The Worker reads the config during bootstrap and scheduled runs, then synchronizes active services into D1.
 4. The frontend bundle is deployed alongside the Worker and reads the canonical public snapshot.
 
 ## Request flow
@@ -97,34 +95,37 @@ The app shell starts in [`apps/web/src/App.tsx`](../apps/web/src/App.tsx), while
 
 ### Monitoring lifecycle
 
-This is the intended runtime path:
+The runtime path is:
 
 1. Services declare one or more checks in config.
 2. Scheduled Worker runs evaluate HTTP and TCP checks and normalize results.
-3. D1 stores the latest service status, every check result, open or resolved incidents, latency points, and notification jobs.
+3. D1 stores the latest service status, every individually labeled check result, open or resolved incidents, location-aware latency points, and notification jobs.
 4. Consecutive failure and recovery thresholds determine incident transitions.
 5. Webhook jobs respect the notification grace period and retry with backoff.
 6. Public APIs read from persisted state instead of exposing storage internals directly.
 
 ## Persistence model
 
-The initial D1 schema in [`apps/worker/migrations/0001_initial.sql`](../apps/worker/migrations/0001_initial.sql) defines explicit tables for:
+The D1 schema starts with [`apps/worker/migrations/0001_initial.sql`](../apps/worker/migrations/0001_initial.sql), which defines:
 
 - `services`
 - `service_status`
 - `incidents`
 - `latency_points`
+
+Later migrations add:
+
 - `check_results`
 - `notification_outbox`
 - `scheduler_runs`
 - `scheduler_lease`
 
-This keeps public summaries and incident history queryable without relying on one serialized state blob.
+Public summaries and incident history remain queryable without a single serialized state blob. The public snapshot keeps the aggregate history contract and adds safe per-location history for regional and proxy checks.
 
 ## Project constraints
 
-- Worker logic owns status data
-- the web app stays presentation-focused
-- shared packages carry contracts, not deployment logic
-- config stays schema-validated
-- public API shapes should stay stable while storage changes
+- Worker logic owns status data.
+- The web app stays presentation-focused.
+- Shared packages carry contracts, not deployment logic.
+- Config stays schema-validated.
+- Public API shapes should stay stable while storage changes.

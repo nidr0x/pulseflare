@@ -41,9 +41,12 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       PULSEFLARE_BOOTSTRAP_TOKEN: ${{ secrets.PULSEFLARE_BOOTSTRAP_TOKEN }}
+      PULSEFLARE_REMOTE_PROBE_TOKEN: ${{ secrets.PULSEFLARE_REMOTE_PROBE_TOKEN }}
       PULSEFLARE_WORKER_NAME: ${{ vars.PULSEFLARE_WORKER_NAME }}
       PULSEFLARE_D1_NAME: ${{ vars.PULSEFLARE_D1_NAME }}
       PULSEFLARE_CHECK_CRON: ${{ vars.PULSEFLARE_CHECK_CRON }}
+      PULSEFLARE_REMOTE_PROBE_URL: ${{ vars.PULSEFLARE_REMOTE_PROBE_URL }}
+      PULSEFLARE_HEALTHCHECK_URL: ${{ vars.PULSEFLARE_HEALTHCHECK_URL }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -62,6 +65,21 @@ jobs:
           test -n "${CLOUDFLARE_API_TOKEN}" || { echo "Missing GitHub secret: CLOUDFLARE_API_TOKEN"; exit 1; }
           test -n "${CLOUDFLARE_ACCOUNT_ID}" || { echo "Missing GitHub secret: CLOUDFLARE_ACCOUNT_ID"; exit 1; }
 
+      - name: Validate deployment checks
+        run: |
+          case "${PULSEFLARE_HEALTHCHECK_URL}" in
+            https://*) ;;
+            *) echo "Missing GitHub variable or invalid value: PULSEFLARE_HEALTHCHECK_URL (must use https://)"; exit 1 ;;
+          esac
+          if [ -n "${PULSEFLARE_REMOTE_PROBE_URL}" ] && [ -z "${PULSEFLARE_REMOTE_PROBE_TOKEN}" ]; then
+            echo "Missing GitHub secret: PULSEFLARE_REMOTE_PROBE_TOKEN"
+            exit 1
+          fi
+          if [ -z "${PULSEFLARE_REMOTE_PROBE_URL}" ] && [ -n "${PULSEFLARE_REMOTE_PROBE_TOKEN}" ]; then
+            echo "Missing GitHub variable: PULSEFLARE_REMOTE_PROBE_URL"
+            exit 1
+          fi
+
       - name: Resolve Cloudflare resources
         id: resources
         run: node .github/scripts/resolve-cloudflare-resources.mjs
@@ -72,6 +90,7 @@ jobs:
           PULSEFLARE_D1_NAME_RENDERED="${{ steps.resources.outputs.database_name }}" \
           PULSEFLARE_D1_ID_RENDERED="${{ steps.resources.outputs.database_id }}" \
           PULSEFLARE_CHECK_CRON_RENDERED="${PULSEFLARE_CHECK_CRON:-* * * * *}" \
+          PULSEFLARE_REMOTE_PROBE_URL_RENDERED="${PULSEFLARE_REMOTE_PROBE_URL}" \
           node .github/scripts/render-deploy-wrangler-config.mjs
 
       - name: Apply D1 migrations
@@ -83,3 +102,10 @@ jobs:
       - name: Configure bootstrap secret
         if: env.PULSEFLARE_BOOTSTRAP_TOKEN != ''
         run: printf '%s' "$PULSEFLARE_BOOTSTRAP_TOKEN" | npx wrangler secret put PULSEFLARE_BOOTSTRAP_TOKEN --config apps/worker/wrangler.deploy.toml
+
+      - name: Configure remote probe secret
+        if: env.PULSEFLARE_REMOTE_PROBE_TOKEN != ''
+        run: printf '%s' "$PULSEFLARE_REMOTE_PROBE_TOKEN" | npx wrangler secret put PULSEFLARE_REMOTE_PROBE_TOKEN --config apps/worker/wrangler.deploy.toml
+
+      - name: Verify live deployment
+        run: node .github/scripts/smoke-test.mjs

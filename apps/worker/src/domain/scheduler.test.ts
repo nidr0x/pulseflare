@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { runScheduledChecks } from './scheduler'
 import * as checkRunnerModule from './check-runner'
+import type { ObservabilityLogger } from '../observability'
 
 type ServiceRow = {
   id: string
@@ -40,7 +41,8 @@ function createFakeDatabase(initial?: {
     statuses: initial?.statuses ?? [],
     incidents: initial?.incidents ?? [],
     notifications: [] as Array<Record<string, unknown>>,
-    latencyWrites: [] as Array<{ serviceId: string; latencyMs: number; recordedAt: string }>,
+    checkResults: [] as Array<Record<string, unknown>>,
+    latencyWrites: [] as Array<{ serviceId: string; latencyMs: number; recordedAt: string; locationLabel: string }>,
     batchCalls: [] as number[],
     forceIncidentConflict: initial?.forceIncidentConflict ?? false,
   }
@@ -139,12 +141,28 @@ function createFakeDatabase(initial?: {
               }
 
               if (query.includes('INSERT INTO check_results')) {
+                const [_id, serviceId, recordedAt, status, reason, latencyMs, locationLabel] = args as [
+                  string,
+                  string,
+                  string,
+                  'up' | 'down',
+                  string,
+                  number | null,
+                  string,
+                ]
+                state.checkResults.push({ serviceId, recordedAt, status, reason, latencyMs, locationLabel })
                 return
               }
 
               if (query.includes('INSERT INTO latency_points')) {
-                const [_id, serviceId, recordedAt, latencyMs] = args as [string, string, string, number]
-                state.latencyWrites.push({ serviceId, recordedAt, latencyMs })
+                const [_id, serviceId, recordedAt, latencyMs, locationLabel] = args as [
+                  string,
+                  string,
+                  string,
+                  number,
+                  string,
+                ]
+                state.latencyWrites.push({ serviceId, recordedAt, latencyMs, locationLabel })
                 return
               }
 
@@ -254,6 +272,10 @@ function createFakeDatabase(initial?: {
   } as unknown as D1Database
 
   return { database, state }
+}
+
+function createTestLogger() {
+  return { info: vi.fn(), warn: vi.fn(), error: vi.fn() } satisfies ObservabilityLogger
 }
 
 describe('runScheduledChecks', () => {
@@ -467,6 +489,7 @@ describe('runScheduledChecks', () => {
       { type: 'tcp', target: 'redis.example.com:6379' },
       expect.any(Function),
       undefined,
+      undefined,
       undefined
     )
     expect(state.statuses[0]).toMatchObject({
@@ -552,5 +575,84 @@ describe('runScheduledChecks', () => {
 
     expect(state.incidents).toHaveLength(1)
     expect(notifyFetcher).not.toHaveBeenCalled()
+  })
+
+  it('persists each configured probe result with its location label', async () => {
+    const { database, state } = createFakeDatabase()
+    vi.spyOn(checkRunnerModule, 'runConfiguredCheck')
+      .mockResolvedValueOnce({ status: 'up', reason: 'IAD passed', latencyMs: 18, locationLabel: 'region:iad' })
+      .mockResolvedValueOnce({ status: 'down', reason: 'FRA failed', latencyMs: 41, locationLabel: 'region:fra' })
+
+    await runScheduledChecks(
+      {
+        PULSEFLARE_D1: database,
+        STATUS_CONFIG: {
+          site: { name: 'Pulseflare' },
+          services: [
+            {
+              id: 'api',
+              name: 'API',
+              failureThreshold: 1,
+              recoveryThreshold: 1,
+              checks: [
+                { type: 'http', url: 'https://api.example.com/health', probe: { kind: 'region', target: 'iad' } },
+                { type: 'http', url: 'https://api.example.com/health', probe: { kind: 'region', target: 'fra' } },
+              ],
+            },
+          ],
+          notifications: { providers: [] },
+          maintenances: [],
+        },
+      },
+      async () => new Response('unused'),
+      '2026-04-25T08:30:00.000Z'
+    )
+
+    expect(state.checkResults).toEqual([
+      expect.objectContaining({ status: 'up', locationLabel: 'region:iad' }),
+      expect.objectContaining({ status: 'down', locationLabel: 'region:fra' }),
+    ])
+    expect(state.latencyWrites).toHaveLength(2)
+  })
+
+  it('emits structured probe, incident, and scheduler lifecycle events', async () => {
+    const { database } = createFakeDatabase()
+    const logger = createTestLogger()
+
+    await runScheduledChecks(
+      {
+        PULSEFLARE_D1: database,
+        STATUS_CONFIG: {
+          site: { name: 'Pulseflare' },
+          services: [
+            {
+              id: 'api',
+              name: 'API',
+              failureThreshold: 1,
+              recoveryThreshold: 1,
+              checks: [{ type: 'http', url: 'https://api.example.com/health' }],
+            },
+          ],
+          notifications: { providers: [] },
+          maintenances: [],
+        },
+      },
+      async () => new Response('down', { status: 503 }),
+      '2026-04-25T08:20:00.000Z',
+      undefined,
+      logger
+    )
+
+    const events = [...logger.info.mock.calls, ...logger.warn.mock.calls, ...logger.error.mock.calls].map(
+      ([message]) => JSON.parse(message as string)
+    )
+
+    expect(events.map((event) => event.event)).toEqual(
+      expect.arrayContaining(['scheduler.run.started', 'probe.failed', 'incident.opened', 'scheduler.run.completed'])
+    )
+    expect(events.find((event) => event.event === 'probe.failed')).toMatchObject({
+      serviceId: 'api',
+      status: 'down',
+    })
   })
 })

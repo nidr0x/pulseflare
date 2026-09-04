@@ -176,6 +176,100 @@ describe('runConfiguredCheck', () => {
     ).resolves.toMatchObject({
       status: 'up',
       latencyMs: 42,
+      locationLabel: 'proxy',
+    })
+  })
+
+  it('authenticates regional probes and applies the check timeout', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe('https://probes.pulseflare.dev/run')
+      expect(init?.method).toBe('POST')
+      expect(init?.headers).toEqual({
+        'content-type': 'application/json',
+        authorization: 'Bearer probe-secret',
+      })
+      expect(init?.signal).toBeInstanceOf(AbortSignal)
+
+      return Response.json({ status: 'up', reason: 'Probe completed', latencyMs: 55 })
+    }) as typeof fetch
+
+    await expect(
+      runConfiguredCheck(
+        {
+          type: 'http',
+          url: 'https://api.example.com/health',
+          timeoutMs: 2500,
+          probe: { kind: 'region', target: 'iad' },
+        },
+        fetcher,
+        undefined,
+        'https://probes.pulseflare.dev/run',
+        'probe-secret'
+      )
+    ).resolves.toMatchObject({ status: 'up', latencyMs: 55, locationLabel: 'region:iad' })
+  })
+
+  it('rejects an unauthenticated regional probe configuration', async () => {
+    const fetcher = vi.fn() as typeof fetch
+
+    await expect(
+      runConfiguredCheck(
+        {
+          type: 'http',
+          url: 'https://api.example.com/health',
+          probe: { kind: 'region', target: 'iad' },
+        },
+        fetcher,
+        undefined,
+        'https://probes.pulseflare.dev/run'
+      )
+    ).resolves.toEqual({
+      status: 'down',
+      reason: 'No shared remote probe token configured for region probe iad',
+      locationLabel: 'region:iad',
+    })
+
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('rejects malformed or oversized remote probe responses', async () => {
+    const malformedFetcher = vi.fn(async () => Response.json({ status: 'up', reason: 'ok', latencyMs: -1 })) as typeof fetch
+
+    await expect(
+      runConfiguredCheck(
+        {
+          type: 'http',
+          url: 'https://api.example.com/health',
+          probe: { kind: 'region', target: 'iad' },
+        },
+        malformedFetcher,
+        undefined,
+        'https://probes.pulseflare.dev/run',
+        'probe-secret'
+      )
+    ).resolves.toEqual({
+      status: 'down',
+      reason: 'Remote probe returned an invalid status payload',
+      locationLabel: 'region:iad',
+    })
+
+    const oversizedFetcher = vi.fn(async () => new Response('x'.repeat(64 * 1024 + 1))) as typeof fetch
+
+    await expect(
+      runConfiguredCheck(
+        {
+          type: 'http',
+          url: 'https://api.example.com/health',
+          probe: { kind: 'region', target: 'iad' },
+        },
+        oversizedFetcher,
+        undefined,
+        'https://probes.pulseflare.dev/run',
+        'probe-secret'
+      )
+    ).resolves.toMatchObject({
+      status: 'down',
+      reason: 'Response body exceeded 65536 byte limit',
     })
   })
 
@@ -207,11 +301,13 @@ describe('runConfiguredCheck', () => {
         },
         fetcher,
         undefined,
-        'https://probes.pulseflare.dev/run'
+        'https://probes.pulseflare.dev/run',
+        'probe-secret'
       )
     ).resolves.toMatchObject({
       status: 'up',
       latencyMs: 55,
+      locationLabel: 'region:iad',
     })
   })
 })

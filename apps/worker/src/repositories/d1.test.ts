@@ -102,7 +102,7 @@ describe('listPublicServiceStatuses', () => {
 })
 
 describe('getPublicServiceHistory', () => {
-  it('aggregates persisted check results into daily windows and uptime', async () => {
+  it('aggregates persisted check results into daily and location windows', async () => {
     const database = {
       prepare(query: string) {
         expect(query).toContain('FROM check_results')
@@ -113,9 +113,36 @@ describe('getPublicServiceHistory', () => {
               async all() {
                 return {
                   results: [
-                    { service_id: 'api', recorded_at: '2026-04-25T08:00:00.000Z', status: 'up' },
-                    { service_id: 'api', recorded_at: '2026-04-25T08:01:00.000Z', status: 'down' },
-                    { service_id: 'api', recorded_at: '2026-04-24T08:00:00.000Z', status: 'up' },
+                    {
+                      service_id: 'api',
+                      recorded_at: '2026-04-25T08:00:00.000Z',
+                      status: 'up',
+                      location_label: 'region:iad',
+                    },
+                    {
+                      service_id: 'api',
+                      recorded_at: '2026-04-25T08:01:00.000Z',
+                      status: 'down',
+                      location_label: 'region:iad',
+                    },
+                    {
+                      service_id: 'api',
+                      recorded_at: '2026-04-25T08:02:00.000Z',
+                      status: 'up',
+                      location_label: 'region:fra',
+                    },
+                    {
+                      service_id: 'api',
+                      recorded_at: '2026-04-24T08:00:00.000Z',
+                      status: 'up',
+                      location_label: 'region:iad',
+                    },
+                    {
+                      service_id: 'api',
+                      recorded_at: '2026-04-24T08:01:00.000Z',
+                      status: 'up',
+                      location_label: 'region:fra',
+                    },
                   ],
                 }
               },
@@ -132,8 +159,12 @@ describe('getPublicServiceHistory', () => {
     )
 
     expect(history.get('api')).toEqual({
-      uptimePercentage: 66.67,
+      uptimePercentage: 80,
       history: ['up', 'degraded'],
+      locations: [
+        { label: 'fra', uptimePercentage: 100, history: ['up', 'up'] },
+        { label: 'iad', uptimePercentage: 66.67, history: ['up', 'degraded'] },
+      ],
     })
   })
 })

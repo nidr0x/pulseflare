@@ -212,6 +212,63 @@ h4 {
   overflow-wrap: anywhere;
 }
 
+.status-retry {
+  padding: 10px 16px;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-pill);
+  color: #ffffff;
+  background: var(--color-accent);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.status-retry:hover,
+.status-retry:focus-visible {
+  border-color: var(--color-accent-strong);
+  background: var(--color-accent-strong);
+  outline: none;
+}
+
+.service-locations {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.service-locations__label {
+  color: var(--color-muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.service-location {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-pill);
+  color: var(--color-muted);
+  background: var(--color-bg);
+  font-size: 0.82rem;
+}
+
+.service-location strong {
+  color: var(--color-ink);
+}
+
+.service-location--down {
+  border-color: rgba(223, 79, 95, 0.35);
+  background: rgba(223, 79, 95, 0.08);
+}
+
+.service-location--degraded {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.1);
+}
+
 .section-heading,
 .service-row__top,
 .timeline-entry__header {

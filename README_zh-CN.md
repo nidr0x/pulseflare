@@ -5,11 +5,11 @@
 
 # Pulseflare
 
-Pulseflare 是一个基于 Cloudflare 的可编排可配置可公开展示的状态页与可用性监控产品。
+Pulseflare 是一个基于 Cloudflare 的可配置状态页和可用性监控工具。
 
-主文档目前以英文版为准，请先阅读 [README.md](README.md)。
+当前主文档以英文版为准，请先阅读 [README.md](README.md)。
 
-后续会补充完整的中文文档，包括：
+后续会补充中文文档，内容包括：
 
 - 产品定位与能力概览
 - 架构说明
