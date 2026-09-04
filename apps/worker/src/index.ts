@@ -1,5 +1,7 @@
 import { handleBootstrapInstall } from './routes/bootstrap'
 import { getWorkerAssets } from './config'
+import { getObservabilityError, emitObservabilityEvent } from './observability'
+import { withSecurityHeaders } from './security'
 import { runScheduledChecks } from './domain/scheduler'
 import {
   handlePublicIncidents,
@@ -15,40 +17,40 @@ const worker = {
     const url = new URL(request.url)
 
     if (url.pathname === '/api/install/bootstrap') {
-      return handleBootstrapInstall(request, env)
+      return withSecurityHeaders(await handleBootstrapInstall(request, env))
     }
 
     if (url.pathname === '/api/public/summary') {
-      return handlePublicSummary(env)
+      return withSecurityHeaders(await handlePublicSummary(env))
     }
 
     if (url.pathname === '/api/public/snapshot') {
-      return handlePublicSnapshot(env)
+      return withSecurityHeaders(await handlePublicSnapshot(env))
     }
 
     if (url.pathname === '/api/health') {
-      return handleHealth(env)
+      return withSecurityHeaders(await handleHealth(env))
     }
 
     if (url.pathname === '/api/public/services') {
-      return handlePublicServices(env)
+      return withSecurityHeaders(await handlePublicServices(env))
     }
 
     if (url.pathname === '/api/public/incidents') {
-      return handlePublicIncidents(env)
+      return withSecurityHeaders(await handlePublicIncidents(env))
     }
 
     if (url.pathname === '/api/public/maintenance') {
-      return handlePublicMaintenance(env)
+      return withSecurityHeaders(await handlePublicMaintenance(env))
     }
 
     const assets = getWorkerAssets(env)
 
     if (assets) {
-      return assets.fetch(request)
+      return withSecurityHeaders(await assets.fetch(request))
     }
 
-    return new Response('Not found', { status: 404 })
+    return withSecurityHeaders(new Response('Not found', { status: 404 }))
   },
   async scheduled(
     _controller: ScheduledController,
@@ -57,7 +59,9 @@ const worker = {
   ): Promise<void> {
     ctx.waitUntil(
       runScheduledChecks(env).catch((error) => {
-        console.error('Pulseflare scheduled check run failed', error)
+        emitObservabilityEvent('error', 'scheduler.execution_failed', {
+          error: getObservabilityError(error),
+        })
       })
     )
   },

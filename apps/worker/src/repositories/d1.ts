@@ -10,6 +10,13 @@ export type PublicServiceStatusRecord = {
 export type PublicServiceHistoryRecord = {
   uptimePercentage: number | null
   history: Array<'up' | 'degraded' | 'down' | 'unknown'>
+  locations: PublicServiceLocationRecord[]
+}
+
+export type PublicServiceLocationRecord = {
+  label: string
+  uptimePercentage: number | null
+  history: Array<'up' | 'degraded' | 'down' | 'unknown'>
 }
 
 export type PublicIncidentRecord = {
@@ -45,6 +52,7 @@ type CheckResultD1Row = {
   service_id: string
   recorded_at: string
   status: 'up' | 'down'
+  location_label?: string | null
 }
 
 type D1Result<T> = {
@@ -131,6 +139,61 @@ function getHistoryDays(now: Date, days: number): string[] {
   })
 }
 
+type DayCounts = { up: number; down: number }
+type DayHistory = Map<string, DayCounts>
+
+function incrementDayCount(days: DayHistory, day: string, status: 'up' | 'down'): void {
+  const counts = days.get(day) ?? { up: 0, down: 0 }
+  counts[status] += 1
+  days.set(day, counts)
+}
+
+function summarizeDayHistory(dayKeys: string[], dayCounts: DayHistory) {
+  let successfulChecks = 0
+  let totalChecks = 0
+
+  const history = dayKeys.map((day) => {
+    const counts = dayCounts.get(day)
+
+    if (!counts) {
+      return 'unknown' as const
+    }
+
+    successfulChecks += counts.up
+    totalChecks += counts.up + counts.down
+
+    if (counts.down === 0) {
+      return 'up' as const
+    }
+
+    return counts.up === 0 ? ('down' as const) : ('degraded' as const)
+  })
+
+  return {
+    uptimePercentage:
+      totalChecks > 0 ? Math.round((successfulChecks / totalChecks) * 10000) / 100 : null,
+    history,
+  }
+}
+
+function mapPublicLocationLabel(value: string): string {
+  const normalized = value.trim()
+
+  if (normalized === 'default' || normalized === 'local') {
+    return 'Local'
+  }
+
+  if (normalized === 'proxy') {
+    return 'Remote proxy'
+  }
+
+  if (normalized.startsWith('region:')) {
+    return normalized.slice('region:'.length) || 'Unknown region'
+  }
+
+  return 'Remote'
+}
+
 export async function getPublicServiceHistory(
   database: D1Database,
   now = new Date(),
@@ -141,7 +204,7 @@ export async function getPublicServiceHistory(
   const result = (await database
     .prepare(
       `
-        SELECT service_id, recorded_at, status
+        SELECT service_id, recorded_at, status, location_label
         FROM check_results
         WHERE recorded_at >= ?
         ORDER BY recorded_at ASC
@@ -150,45 +213,38 @@ export async function getPublicServiceHistory(
     .bind(cutoff)
     .all()) as D1Result<CheckResultD1Row>
 
-  const grouped = new Map<string, Map<string, { up: number; down: number }>>()
+  const grouped = new Map<string, { aggregate: DayHistory; locations: Map<string, DayHistory> }>()
 
   for (const row of result.results ?? []) {
     const day = row.recorded_at.slice(0, 10)
-    const serviceDays = grouped.get(row.service_id) ?? new Map<string, { up: number; down: number }>()
-    const counts = serviceDays.get(day) ?? { up: 0, down: 0 }
-    counts[row.status] += 1
-    serviceDays.set(day, counts)
-    grouped.set(row.service_id, serviceDays)
+    const serviceHistory = grouped.get(row.service_id) ?? {
+      aggregate: new Map<string, DayCounts>(),
+      locations: new Map<string, DayHistory>(),
+    }
+    const locationLabel = row.location_label?.trim() || 'default'
+    const locationDays = serviceHistory.locations.get(locationLabel) ?? new Map<string, DayCounts>()
+
+    incrementDayCount(serviceHistory.aggregate, day, row.status)
+    incrementDayCount(locationDays, day, row.status)
+    serviceHistory.locations.set(locationLabel, locationDays)
+    grouped.set(row.service_id, serviceHistory)
   }
 
   return new Map(
-    [...grouped.entries()].map(([serviceId, serviceDays]) => {
-      let successfulChecks = 0
-      let totalChecks = 0
-
-      const history = dayKeys.map((day) => {
-        const counts = serviceDays.get(day)
-
-        if (!counts) {
-          return 'unknown' as const
-        }
-
-        successfulChecks += counts.up
-        totalChecks += counts.up + counts.down
-
-        if (counts.down === 0) {
-          return 'up' as const
-        }
-
-        return counts.up === 0 ? ('down' as const) : ('degraded' as const)
-      })
+    [...grouped.entries()].map(([serviceId, serviceHistory]) => {
+      const aggregate = summarizeDayHistory(dayKeys, serviceHistory.aggregate)
+      const locations = [...serviceHistory.locations.entries()]
+        .map(([label, dayCounts]) => ({
+          label: mapPublicLocationLabel(label),
+          ...summarizeDayHistory(dayKeys, dayCounts),
+        }))
+        .sort((left, right) => left.label.localeCompare(right.label))
 
       return [
         serviceId,
         {
-          uptimePercentage:
-            totalChecks > 0 ? Math.round((successfulChecks / totalChecks) * 10000) / 100 : null,
-          history,
+          ...aggregate,
+          locations,
         },
       ] as const
     })

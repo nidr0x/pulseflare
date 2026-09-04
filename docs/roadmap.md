@@ -1,25 +1,26 @@
 # Roadmap
 
-Pulseflare should stay small: config in code, status data in D1, and deployment through GitHub Actions.
+Pulseflare stays small: config in code, status data in D1, and deployment through GitHub Actions.
 
 ## Completed
 
-- Replace demo UI state with one canonical public snapshot API.
-- Add real uptime history and latency retention from persisted check results.
-- Add thresholded incident transitions and retryable webhook notifications.
-- Harden bootstrap with a POST and Authorization header.
+- Use one canonical public snapshot API instead of demo UI state.
+- Calculate uptime history and retain latency data from persisted check results.
+- Use thresholded incident transitions and retryable webhook notifications.
+- Protect bootstrap with a POST request and an Authorization header.
+- Add scheduler run leases and a health endpoint.
+- Add remote region and proxy probe execution.
 
 ## Near term
 
-- Add scheduler run leases and a small internal health or heartbeat signal.
-- Add explicit provider integrations beyond generic webhooks.
-- Improve first-run deploy errors and migration diagnostics.
+- Add provider integrations beyond generic webhooks.
+- Improve first-deployment errors and migration diagnostics.
 
 ## Later
 
-- More status-page branding options.
-- Incident RSS or Atom feeds.
-- Optional external probes for multi-region checks.
+- Add more status-page branding options.
+- Add incident RSS or Atom feeds.
+- Expand external probe support beyond the current region and proxy routing.
 
 ## Non-goals for now
 

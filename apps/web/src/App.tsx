@@ -23,6 +23,8 @@ export default function App() {
   const [pathname, setPathname] = useState<RoutePath>(readPathname)
   const [snapshot, setSnapshot] = useState<StatusSnapshot>(() => getInitialStatusSnapshot())
   const [snapshotLoadState, setSnapshotLoadState] = useState<SnapshotLoadState>('idle')
+  const [clockNow, setClockNow] = useState(() => Date.now())
+  const [retryToken, setRetryToken] = useState(0)
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -115,7 +117,15 @@ export default function App() {
       window.removeEventListener('popstate', handleNavigation)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
+  }, [retryToken])
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setClockNow(Date.now()), 30_000)
+
+    return () => window.clearInterval(intervalId)
   }, [])
+
+  const retrySnapshot = () => setRetryToken((value) => value + 1)
 
   const navigate = (nextPath: RoutePath) => (event: MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault()
@@ -177,7 +187,12 @@ export default function App() {
         {pathname === '/incidents' ? (
           <IncidentsPage snapshot={snapshot} />
         ) : (
-          <HomePage snapshot={snapshot} loadState={snapshotLoadState} />
+          <HomePage
+            now={clockNow}
+            onRetry={retrySnapshot}
+            snapshot={snapshot}
+            loadState={snapshotLoadState}
+          />
         )}
       </main>
     </div>

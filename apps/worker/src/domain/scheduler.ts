@@ -1,9 +1,10 @@
 import type { StatusService } from '@pulseflare/schema'
 
-import { getRemoteProbeUrl, getWorkerDatabase, getWorkerSecret } from '../config'
+import { getRemoteProbeToken, getRemoteProbeUrl, getWorkerDatabase, getWorkerSecret } from '../config'
 import { ensureBootstrapSchema, getRuntimeConfig, syncServices } from '../install'
 import { runConfiguredCheck, type CheckRunResult } from './check-runner'
 import { deriveIncidentMutation, type IncidentMutation } from './incident-engine'
+import { emitObservabilityEvent, getObservabilityError, type ObservabilityLogger } from '../observability'
 import {
   dispatchPendingNotifications,
   prepareCancelPendingIncidentNotifications,
@@ -29,6 +30,7 @@ type ServiceCheckSummary = {
   status: 'up' | 'down'
   reason: string
   latencyMs?: number
+  checks: CheckRunResult[]
 }
 
 export type ScheduledCheckSummary = {
@@ -120,6 +122,7 @@ function prepareCheckResult(
     status: 'up' | 'down'
     reason: string
     latencyMs?: number
+    locationLabel?: string
   }
 ): D1PreparedStatement {
   return database
@@ -136,13 +139,13 @@ function prepareCheckResult(
       input.status,
       input.reason,
       input.latencyMs ?? null,
-      'default'
+      input.locationLabel ?? 'default'
     )
 }
 
 function prepareLatencyPoint(
   database: D1Database,
-  input: { serviceId: string; recordedAt: string; latencyMs: number }
+  input: { serviceId: string; recordedAt: string; latencyMs: number; locationLabel?: string }
 ): D1PreparedStatement {
   return database
     .prepare(
@@ -151,7 +154,13 @@ function prepareLatencyPoint(
         VALUES (?, ?, ?, ?, ?)
       `
     )
-    .bind(crypto.randomUUID(), input.serviceId, input.recordedAt, input.latencyMs, 'default')
+    .bind(
+      crypto.randomUUID(),
+      input.serviceId,
+      input.recordedAt,
+      input.latencyMs,
+      input.locationLabel ?? 'default'
+    )
 }
 
 function prepareOpenIncident(
@@ -192,6 +201,7 @@ function summarizeServiceResults(results: CheckRunResult[]): ServiceCheckSummary
       status: 'down',
       reason: failed.reason,
       latencyMs: failed.latencyMs,
+      checks: results,
     }
   }
 
@@ -206,18 +216,20 @@ function summarizeServiceResults(results: CheckRunResult[]): ServiceCheckSummary
       latencyValues.length > 0
         ? Math.round(latencyValues.reduce((sum, value) => sum + value, 0) / latencyValues.length)
         : undefined,
+    checks: results,
   }
 }
 
 async function runServiceChecks(
   service: StatusService,
   fetcher: Fetcher,
-  remoteProbeUrl?: string
+  remoteProbeUrl?: string,
+  remoteProbeToken?: string
 ): Promise<ServiceCheckSummary> {
   const results: CheckRunResult[] = []
 
   for (const check of service.checks) {
-    results.push(await runConfiguredCheck(check, fetcher, undefined, remoteProbeUrl))
+    results.push(await runConfiguredCheck(check, fetcher, undefined, remoteProbeUrl, remoteProbeToken))
   }
 
   return summarizeServiceResults(results)
@@ -227,7 +239,9 @@ async function runServiceChecksConcurrently(
   services: StatusService[],
   fetcher: Fetcher,
   remoteProbeUrl?: string,
-  onServiceFinished?: () => Promise<void>
+  remoteProbeToken?: string,
+  onServiceFinished?: () => Promise<void>,
+  logger: ObservabilityLogger = console
 ): Promise<Array<{ service: StatusService; result: ServiceCheckSummary }>> {
   const results: Array<ServiceCheckSummary | undefined> = new Array(services.length)
   let nextIndex = 0
@@ -242,12 +256,43 @@ async function runServiceChecksConcurrently(
       }
 
       try {
-        results[index] = await runServiceChecks(services[index], fetcher, remoteProbeUrl)
+        const result = await runServiceChecks(services[index], fetcher, remoteProbeUrl, remoteProbeToken)
+        results[index] = result
+
+        if (result.status === 'down') {
+          emitObservabilityEvent(
+            'warn',
+            'probe.failed',
+            {
+              serviceId: services[index].id,
+              status: result.status,
+              latencyMs: result.latencyMs,
+              reason: getObservabilityError(result.reason),
+            },
+            logger
+          )
+        }
       } catch (error) {
         results[index] = {
           status: 'down',
           reason: error instanceof Error ? error.message : 'Check execution failed',
+          checks: [
+            {
+              status: 'down',
+              reason: error instanceof Error ? error.message : 'Check execution failed',
+            },
+          ],
         }
+        emitObservabilityEvent(
+          'error',
+          'probe.failed',
+          {
+            serviceId: services[index].id,
+            status: 'down',
+            error: getObservabilityError(error),
+          },
+          logger
+        )
       }
 
       if (onServiceFinished) {
@@ -262,7 +307,11 @@ async function runServiceChecksConcurrently(
 
   return services.map((service, index) => ({
     service,
-    result: results[index] ?? { status: 'down', reason: 'Check execution failed' },
+    result: results[index] ?? {
+      status: 'down',
+      reason: 'Check execution failed',
+      checks: [{ status: 'down', reason: 'Check execution failed' }],
+    },
   }))
 }
 
@@ -443,7 +492,8 @@ export async function runScheduledChecks(
   env: unknown,
   fetcher: Fetcher = globalThis.fetch,
   checkedAt = new Date().toISOString(),
-  notificationFetcher: Fetcher = fetcher
+  notificationFetcher: Fetcher = fetcher,
+  logger: ObservabilityLogger = console
 ): Promise<ScheduledCheckSummary> {
   const database = getWorkerDatabase(env)
 
@@ -453,10 +503,17 @@ export async function runScheduledChecks(
 
   const config = getRuntimeConfig(env)
   const remoteProbeUrl = getRemoteProbeUrl(env)
+  const remoteProbeToken = getRemoteProbeToken(env)
   const runId = crypto.randomUUID()
+
+  emitObservabilityEvent('info', 'scheduler.run.started', {
+    runId,
+    servicesConfigured: config.services.length,
+  }, logger)
 
   await ensureBootstrapSchema(database)
   if (!(await acquireSchedulerLease(database, checkedAt, runId))) {
+    emitObservabilityEvent('info', 'scheduler.run.skipped', { runId, reason: 'lease_not_acquired' }, logger)
     return { servicesChecked: 0, upCount: 0, downCount: 0 }
   }
 
@@ -469,11 +526,18 @@ export async function runScheduledChecks(
 
     let upCount = 0
     let downCount = 0
-    const serviceResults = await runServiceChecksConcurrently(config.services, fetcher, remoteProbeUrl, async () => {
-      if (!(await renewSchedulerLease(database, new Date().toISOString(), runId))) {
-        throw new Error('Scheduler lease lost during service checks')
-      }
-    })
+    const serviceResults = await runServiceChecksConcurrently(
+      config.services,
+      fetcher,
+      remoteProbeUrl,
+      remoteProbeToken,
+      async () => {
+        if (!(await renewSchedulerLease(database, new Date().toISOString(), runId))) {
+          throw new Error('Scheduler lease lost during service checks')
+        }
+      },
+      logger
+    )
 
     for (const { service, result } of serviceResults) {
       if (!(await renewSchedulerLease(database, new Date().toISOString(), runId))) {
@@ -522,23 +586,30 @@ export async function runScheduledChecks(
           failureCount,
           recoveryCount,
         }),
-        prepareCheckResult(database, {
-          serviceId: service.id,
-          recordedAt: checkedAt,
-          status: result.status,
-          reason: result.reason,
-          latencyMs: result.latencyMs,
-        }),
       ]
 
-      if (typeof result.latencyMs === 'number') {
+      for (const checkResult of result.checks) {
         statements.push(
-          prepareLatencyPoint(database, {
+          prepareCheckResult(database, {
             serviceId: service.id,
             recordedAt: checkedAt,
-            latencyMs: result.latencyMs,
+            status: checkResult.status,
+            reason: checkResult.reason,
+            latencyMs: checkResult.latencyMs,
+            locationLabel: checkResult.locationLabel,
           })
         )
+
+        if (typeof checkResult.latencyMs === 'number') {
+          statements.push(
+            prepareLatencyPoint(database, {
+              serviceId: service.id,
+              recordedAt: checkedAt,
+              latencyMs: checkResult.latencyMs,
+              locationLabel: checkResult.locationLabel,
+            })
+          )
+        }
       }
 
       const suppressOpenNotification =
@@ -580,11 +651,31 @@ export async function runScheduledChecks(
 
       await database.batch(statements)
 
+      if (mutation.action === 'resolve' && existingOpenIncident) {
+        emitObservabilityEvent(
+          'info',
+          'incident.resolved',
+          { incidentId: existingOpenIncident.id, serviceId: service.id },
+          logger
+        )
+      }
+
       if (mutation.action === 'open' && !suppressOpenNotification) {
         const persistedIncident = await findOpenIncident(database, service.id)
         if (!persistedIncident) {
           throw new Error(`Open incident was not persisted for service ${service.id}`)
         }
+
+        emitObservabilityEvent(
+          'info',
+          'incident.opened',
+          {
+            incidentId: persistedIncident.id,
+            serviceId: service.id,
+            notificationsSuppressed: suppressOpenNotification,
+          },
+          logger
+        )
 
         const notificationStatements = prepareNotificationDispatches(database, config, {
           mutation,
@@ -606,7 +697,7 @@ export async function runScheduledChecks(
           .map((provider) => [provider.secretName as string, getWorkerSecret(env, provider.secretName as string)])
           .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
       )
-      await dispatchPendingNotifications(database, config, notificationFetcher, new Date(checkedAt), secrets)
+      await dispatchPendingNotifications(database, config, notificationFetcher, new Date(checkedAt), secrets, logger)
     }
 
     await pruneHistoricalData(database, config.retentionDays ?? DEFAULT_RETENTION_DAYS, checkedAt)
@@ -617,10 +708,17 @@ export async function runScheduledChecks(
       downCount,
     }
     await finishSchedulerRun(database, runId, checkedAt, summary)
+    emitObservabilityEvent('info', 'scheduler.run.completed', { runId, ...summary }, logger)
     return summary
   } catch (error) {
     if (runStarted) {
       await failSchedulerRun(database, runId, new Date().toISOString(), error)
+      emitObservabilityEvent(
+        'error',
+        'scheduler.run.failed',
+        { runId, error: getObservabilityError(error) },
+        logger
+      )
     }
     throw error
   } finally {

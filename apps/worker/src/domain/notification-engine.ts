@@ -1,6 +1,7 @@
 import type { StatusConfig, StatusNotificationProvider } from '@pulseflare/schema'
 
 import type { IncidentMutation } from './incident-engine'
+import { emitObservabilityEvent, getObservabilityError, type ObservabilityLogger } from '../observability'
 
 export type NotificationDispatch = {
   providerId: string
@@ -309,7 +310,7 @@ async function markNotificationFailure(
   error: unknown,
   now: Date,
   claimId: string
-) {
+): Promise<{ status: 'retrying' | 'failed'; attempts: number }> {
   const attempts = row.attempts + 1
   const status = attempts >= MAX_NOTIFICATION_ATTEMPTS ? 'failed' : 'retrying'
   const reason = error instanceof Error ? error.message.slice(0, 500) : 'Unknown notification delivery error'
@@ -326,6 +327,8 @@ async function markNotificationFailure(
     )
     .bind(status, attempts, nextAttemptAt, reason, row.id, claimId)
     .run()
+
+  return { status, attempts }
 }
 
 async function claimNotification(
@@ -357,7 +360,8 @@ export async function dispatchPendingNotifications(
   config: StatusConfig,
   fetcher: typeof fetch = globalThis.fetch,
   now = new Date(),
-  secrets: Record<string, string> = {}
+  secrets: Record<string, string> = {},
+  logger: ObservabilityLogger = console
 ): Promise<void> {
   const result = (await database
     .prepare(
@@ -383,7 +387,26 @@ export async function dispatchPendingNotifications(
     const provider = getProvider(config.notifications.providers, row.provider_id)
 
     if (!provider) {
-      await markNotificationFailure(database, row, new Error('Notification provider is not configured'), now, claimId)
+      const failure = await markNotificationFailure(
+        database,
+        row,
+        new Error('Notification provider is not configured'),
+        now,
+        claimId
+      )
+      emitObservabilityEvent(
+        'error',
+        'notification.failed',
+        {
+          providerId: row.provider_id,
+          notificationEvent: row.event,
+          incidentId: row.incident_id,
+          attempts: failure.attempts,
+          status: failure.status,
+          error: 'Notification provider is not configured',
+        },
+        logger
+      )
       continue
     }
 
@@ -400,8 +423,32 @@ export async function dispatchPendingNotifications(
         )
         .bind(now.toISOString(), row.id, claimId)
         .run()
+      emitObservabilityEvent(
+        'info',
+        'notification.delivered',
+        {
+          providerId: row.provider_id,
+          notificationEvent: row.event,
+          incidentId: row.incident_id,
+          attempts: row.attempts + 1,
+        },
+        logger
+      )
     } catch (error) {
-      await markNotificationFailure(database, row, error, now, claimId)
+      const failure = await markNotificationFailure(database, row, error, now, claimId)
+      emitObservabilityEvent(
+        'error',
+        'notification.failed',
+        {
+          providerId: row.provider_id,
+          notificationEvent: row.event,
+          incidentId: row.incident_id,
+          attempts: failure.attempts,
+          status: failure.status,
+          error: getObservabilityError(error),
+        },
+        logger
+      )
     }
   }
 }

@@ -55,31 +55,62 @@ export function ServiceGroupList({ services }: ServiceGroupListProps) {
             </div>
 
             <ul className="service-list service-list--stacked" role="list">
-              {groupServices.map((service) => (
-                <li className="service-row" key={service.id}>
-                  <div className="service-row__top">
-                    <div className="service-row__identity">
-                      <h4>{service.name}</h4>
-                    </div>
-                    <div className="service-row__summary">
-                      <strong>{service.uptimePercentage === null ? '--' : formatUptime(service.uptimePercentage)}</strong>
-                      <span>{service.latencyMs === null ? '--' : `${service.latencyMs} ms`}</span>
-                      <span className={`service-badge service-badge--${service.status}`}>{formatState(service.status)}</span>
-                    </div>
-                  </div>
+              {groupServices.map((service) => {
+                const locations = service.locations ?? []
 
-                  <div aria-label={`${service.name} uptime history`} className="uptime-strip" role="img">
-                    {service.history.map((window, index) => (
-                      <span
-                        className={`uptime-strip__bar uptime-strip__bar--${formatWindowState(window)}`}
-                        key={`${service.id}-${index}`}
-                      />
-                    ))}
-                  </div>
+                return (
+                  <li className="service-row" key={service.id}>
+                    <div className="service-row__top">
+                      <div className="service-row__identity">
+                        <h4>{service.name}</h4>
+                      </div>
+                      <div className="service-row__summary">
+                        <strong>
+                          {service.uptimePercentage === null ? '--' : formatUptime(service.uptimePercentage)}
+                        </strong>
+                        <span>{service.latencyMs === null ? '--' : `${service.latencyMs} ms`}</span>
+                        <span className={`service-badge service-badge--${service.status}`}>
+                          {formatState(service.status)}
+                        </span>
+                      </div>
+                    </div>
 
-                  <p className="service-row__notes">{service.notes}</p>
-                </li>
-              ))}
+                    <div aria-label={`${service.name} uptime history`} className="uptime-strip" role="img">
+                      {service.history.map((window, index) => (
+                        <span
+                          className={`uptime-strip__bar uptime-strip__bar--${formatWindowState(window)}`}
+                          key={`${service.id}-${index}`}
+                        />
+                      ))}
+                    </div>
+
+                    {locations.length > 0 ? (
+                      <div aria-label={`${service.name} regional health`} className="service-locations">
+                        <span className="service-locations__label">Regional health</span>
+                        {locations.map((location) => {
+                          const latestState = location.history.at(-1) ?? 'unknown'
+
+                          return (
+                            <span
+                              className={`service-location service-location--${formatWindowState(latestState)}`}
+                              key={`${service.id}-${location.label}`}
+                            >
+                              <span>{location.label}</span>
+                              <strong>
+                                {location.uptimePercentage === null
+                                  ? '--'
+                                  : formatUptime(location.uptimePercentage)}
+                              </strong>
+                            </span>
+                          )
+                        })}
+                      </div>
+                    ) : null}
+
+                    <p className="service-row__notes">{service.notes}</p>
+                  </li>
+                )
+              })}
             </ul>
           </section>
         ))}

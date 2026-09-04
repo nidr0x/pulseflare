@@ -1,26 +1,26 @@
 # Pulseflare
 
-Uptime monitoring and a public status page for Cloudflare.
+Cloudflare-based uptime monitoring with a public status page.
 
-The intended install path is:
+The basic setup is:
 
-1. create a repo from this one
-2. add Cloudflare credentials to GitHub
-3. edit `config/pulse.config.ts`
-4. push to `main`
+1. Create a repository from this template.
+2. Add Cloudflare credentials to GitHub.
+3. Edit `config/pulse.config.ts`.
+4. Push to `main`.
 
-GitHub Actions handles the Cloudflare deployment. You should not need Wrangler, Terraform, or manual SQL for the basic setup.
+GitHub Actions handles the Cloudflare deployment. The basic setup does not require Wrangler, Terraform, or manual SQL.
 
-## What it looks like
+## Public page
 
-The public page shows:
+The public page includes:
 
 - current overall status
 - service rows with status and response time
 - 90-day uptime bars
 - recent incidents and maintenance windows
 
-The UI lives in `apps/web`. By default it is deployed as static assets on the same Worker that serves `/api/*`. A separate Cloudflare Pages deployment can be added later, but it is not needed for the default setup.
+The UI lives in `apps/web` and is deployed as static assets on the Worker that serves `/api/*`. A separate Cloudflare Pages deployment is possible, but the default setup does not need one.
 
 ![Pulseflare public status page](docs/screenshots/public-status-page.png)
 
@@ -28,27 +28,27 @@ The UI lives in `apps/web`. By default it is deployed as static assets on the sa
 
 ## Quickstart
 
-### 1. Use this template
+### 1. Create a repository
 
-Create a new repository from this one.
+Create a new repository from this template.
 
 ### 2. Create a Cloudflare API token
 
-Create a Cloudflare API token that can deploy Workers and manage D1.
+Create a Cloudflare API token with permission to deploy Workers and manage D1.
 
 Use:
 
 - `Cloudflare Workers:Edit`
 - `D1:Edit`
 
-You also need the Cloudflare account ID:
+You also need the Cloudflare account ID.
 
 1. Open the dashboard for your account
 2. Select any domain or Workers project
 3. In the right sidebar, look for `Account ID`
 4. Copy that value
 
-Cloudflare also includes it in many account URLs after `/accounts/`, but the sidebar is usually easier.
+Cloudflare also includes the account ID in many URLs after `/accounts/`. The sidebar is usually easier to use.
 
 ### 3. Add GitHub secrets
 
@@ -57,28 +57,31 @@ In your GitHub repo, add:
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
 - `PULSEFLARE_BOOTSTRAP_TOKEN` if you want to use the protected bootstrap endpoint
+- `PULSEFLARE_REMOTE_PROBE_TOKEN` if you use regional probes
 
-Optional GitHub repository variables:
+Optional GitHub repository variables are:
 
 - `PULSEFLARE_ENABLE_DEPLOY`
 - `PULSEFLARE_WORKER_NAME`
 - `PULSEFLARE_D1_NAME`
 - `PULSEFLARE_CHECK_CRON`
 - `PULSEFLARE_REMOTE_PROBE_URL`
+- `PULSEFLARE_HEALTHCHECK_URL`
 
-Defaults:
+The defaults are:
 
 - Deploy disabled
 - Worker name: `pulseflare-status`
 - D1 name: `pulseflare-d1`
 - Check schedule: `* * * * *`
 - Shared remote probe endpoint: unset
+- Deployment health-check URL: required when deployment is enabled
 
-Deployment is disabled unless `PULSEFLARE_ENABLE_DEPLOY=true`. Leave it unset in repos that should only run tests and builds.
+Deployment stays disabled unless `PULSEFLARE_ENABLE_DEPLOY=true`. Leave the variable unset in repositories that should only run tests and builds.
 
-### 4. Edit the config
+### 4. Configure the monitor
 
-Edit [`config/pulse.config.ts`](config/pulse.config.ts) with your site name, services, maintenance windows, and notification settings.
+Edit [`config/pulse.config.ts`](config/pulse.config.ts) to set the site name, services, maintenance windows, and notification settings.
 
 You can start from [`config/pulse.example.ts`](config/pulse.example.ts).
 
@@ -95,10 +98,11 @@ The workflow in [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml):
 - deploys one Worker that serves both:
   - the public status site
   - the `/api/*` routes
+- verifies the live `/api/health` and `/api/public/snapshot` endpoints
 
-The default install is one Worker with static assets, API routes, and a D1 binding.
+The default setup uses one Worker with static assets, API routes, and a D1 binding.
 
-Suggested guardrail:
+Keep deployment enabled only in the repository that owns the real Worker and D1 database:
 
 - leave `PULSEFLARE_ENABLE_DEPLOY` unset in development or upstream repos
 - set `PULSEFLARE_ENABLE_DEPLOY=true` only in the real deployment repo
@@ -107,23 +111,23 @@ More detail: [docs/deployment.md](docs/deployment.md).
 
 ## Cost
 
-Cloudflare pricing that matters for this project, checked April 23, 2026:
+Cloudflare pricing relevant to this project, checked April 23, 2026:
 
 - Workers Free: `100,000` requests per day, with `10 ms` CPU time per invocation included. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)
 - Workers Static Assets: static asset requests are `free and unlimited`. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/) and [Static assets best practices](https://developers.cloudflare.com/workers/best-practices/workers-best-practices/)
 - D1 Free: `5 million` rows read per day, `100,000` rows written per day, and `5 GB` total storage. [D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/)
 - Workers Paid: minimum `$5/month`, with `10 million` included requests per month, then `$0.30` per additional million requests. [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)
 
-Expected cost for small installs:
+For small installs:
 
 - Most hobby and small-team installs should fit in the free tier.
 - Costs depend on monitor count, check frequency, public traffic, and D1 usage.
 
-The public page is served as Worker static assets. The Worker runs first for `/api/*`, not for every static page hit.
+The public page uses Worker static assets. The Worker handles `/api/*` before static asset handling, but it does not run first for every static page request.
 
 ## Current scope
 
-In the repo:
+The repository contains:
 
 - checked-in config schema in [`config/pulse.config.ts`](config/pulse.config.ts)
 - Worker routes
@@ -221,7 +225,7 @@ More detail:
 
 ## Local development
 
-Local tooling is for contributors:
+Use the local tooling when contributing:
 
 ```bash
 npm install
@@ -230,13 +234,13 @@ npm run build
 npm run lint
 ```
 
-For local Worker work:
+To work on the Worker locally:
 
 ```bash
 npm run dev:worker
 ```
 
-For local UI work:
+To work on the UI locally:
 
 ```bash
 npm run dev:web
@@ -244,7 +248,7 @@ npm run dev:web
 
 ## Contributing
 
-Contributions are welcome, especially around:
+Contributions are welcome in areas such as:
 
 - check execution
 - incident persistence

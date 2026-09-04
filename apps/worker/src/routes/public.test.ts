@@ -86,8 +86,18 @@ describe('/api/public/snapshot', () => {
                 async all() {
                   return {
                     results: [
-                      { service_id: 'api', recorded_at: '2026-04-25T08:00:00.000Z', status: 'up' },
-                      { service_id: 'api', recorded_at: '2026-04-25T08:01:00.000Z', status: 'down' },
+                      {
+                        service_id: 'api',
+                        recorded_at: '2026-04-25T08:00:00.000Z',
+                        status: 'up',
+                        location_label: 'region:iad',
+                      },
+                      {
+                        service_id: 'api',
+                        recorded_at: '2026-04-25T08:01:00.000Z',
+                        status: 'down',
+                        location_label: 'region:iad',
+                      },
                     ],
                   }
                 },
@@ -161,7 +171,11 @@ describe('/api/public/snapshot', () => {
       status: 'degraded',
       checkedAt: '2026-04-25T08:01:00.000Z',
     })
-    expect(payload.services[0]).toMatchObject({ uptimePercentage: 50, history: expect.arrayContaining(['degraded']) })
+    expect(payload.services[0]).toMatchObject({
+      uptimePercentage: 50,
+      history: expect.arrayContaining(['degraded']),
+      locations: [{ label: 'iad', uptimePercentage: 50 }],
+    })
     expect(payload.incidents).toEqual([
       expect.objectContaining({
         id: 'incident-1',

@@ -7,6 +7,7 @@ export type WorkerEnv = Partial<Env> & {
   }
   PULSEFLARE_BOOTSTRAP_TOKEN?: string
   PULSEFLARE_REMOTE_PROBE_URL?: string
+  PULSEFLARE_REMOTE_PROBE_TOKEN?: string
   STATUS_CONFIG?: StatusConfig
 }
 
@@ -62,4 +63,15 @@ export function getRemoteProbeUrl(env: unknown): string | undefined {
 
   const { PULSEFLARE_REMOTE_PROBE_URL } = env as WorkerEnv
   return PULSEFLARE_REMOTE_PROBE_URL
+}
+
+export function getRemoteProbeToken(env: unknown): string | undefined {
+  if (!env || typeof env !== 'object') {
+    return undefined
+  }
+
+  const { PULSEFLARE_REMOTE_PROBE_TOKEN } = env as WorkerEnv
+  return typeof PULSEFLARE_REMOTE_PROBE_TOKEN === 'string' && PULSEFLARE_REMOTE_PROBE_TOKEN.trim().length > 0
+    ? PULSEFLARE_REMOTE_PROBE_TOKEN
+    : undefined
 }
