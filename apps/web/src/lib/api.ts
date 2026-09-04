@@ -1,8 +1,15 @@
 export type SummaryState = 'operational' | 'degraded' | 'unknown'
 export type SnapshotLoadState = 'idle' | 'loading' | 'ready' | 'error'
+export const DEFAULT_STALE_AFTER_MINUTES = 5
 
 export type ServiceState = 'operational' | 'degraded' | 'outage' | 'unknown'
 export type UptimeWindowState = 'up' | 'degraded' | 'down' | 'unknown'
+
+export type ServiceLocationRecord = {
+  label: string
+  uptimePercentage: number | null
+  history: UptimeWindowState[]
+}
 
 export type ServiceRecord = {
   id: string
@@ -12,6 +19,7 @@ export type ServiceRecord = {
   uptimePercentage: number | null
   latencyMs: number | null
   history: UptimeWindowState[]
+  locations: ServiceLocationRecord[]
   notes: string
 }
 
@@ -45,6 +53,7 @@ export type StatusSnapshot = {
   summary: {
     status: SummaryState
     checkedAt: string | null
+    staleAfterMinutes?: number
     upCount: number
     downCount: number
     totalCount: number
@@ -65,6 +74,7 @@ export const EMPTY_STATUS_SNAPSHOT: StatusSnapshot = {
   summary: {
     status: 'unknown',
     checkedAt: null,
+    staleAfterMinutes: DEFAULT_STALE_AFTER_MINUTES,
     upCount: 0,
     downCount: 0,
     totalCount: 0,
@@ -126,4 +136,54 @@ export async function getStatusSnapshot(fetcher?: typeof fetch): Promise<StatusS
 
 export function getInitialStatusSnapshot(): StatusSnapshot {
   return EMPTY_STATUS_SNAPSHOT
+}
+
+export type SnapshotFreshness = {
+  state: 'waiting' | 'fresh' | 'stale'
+  ageMs: number | null
+  staleByMs: number
+}
+
+export function getSnapshotFreshness(
+  checkedAt: string | null,
+  now = Date.now(),
+  staleAfterMinutes = DEFAULT_STALE_AFTER_MINUTES
+): SnapshotFreshness {
+  if (!checkedAt) {
+    return { state: 'waiting', ageMs: null, staleByMs: 0 }
+  }
+
+  const timestamp = Date.parse(checkedAt)
+  if (!Number.isFinite(timestamp)) {
+    return { state: 'waiting', ageMs: null, staleByMs: 0 }
+  }
+
+  const ageMs = Math.max(0, now - timestamp)
+  const staleAfterMs = Math.max(0, staleAfterMinutes) * 60_000
+
+  return {
+    state: ageMs > staleAfterMs ? 'stale' : 'fresh',
+    ageMs,
+    staleByMs: Math.max(0, ageMs - staleAfterMs),
+  }
+}
+
+export function formatDuration(milliseconds: number): string {
+  const seconds = Math.max(0, Math.round(milliseconds / 1000))
+
+  if (seconds < 60) {
+    return 'less than a minute'
+  }
+
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) {
+    return `${minutes} min`
+  }
+
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) {
+    return `${hours} hr`
+  }
+
+  return `${Math.floor(hours / 24)} days`
 }

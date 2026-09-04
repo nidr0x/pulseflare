@@ -4,9 +4,9 @@ Pulseflare reads config from [`config/pulse.config.ts`](../config/pulse.config.t
 
 ## Entry point
 
-Use `defineStatusConfig(...)` for the checked-in config. Use `parseStatusConfig(...)` when runtime validation is needed.
+Use `defineStatusConfig(...)` in the checked-in config. Use `parseStatusConfig(...)` when validating config at runtime.
 
-This document describes the schema and the runtime behavior that exists today.
+This document covers the current schema and runtime behavior.
 
 ```ts
 import { defineStatusConfig } from '@pulseflare/schema'
@@ -26,7 +26,7 @@ export default defineStatusConfig({
 
 ### `site`
 
-Public site metadata:
+Public site metadata includes:
 
 - `name`: required display name
 - `description`: optional public subtitle
@@ -37,9 +37,7 @@ Public site metadata:
 
 ### `services`
 
-Services to monitor.
-
-Each service includes:
+Services to monitor. Each service includes:
 
 - `id`: required stable identifier
 - `name`: required display name
@@ -52,12 +50,12 @@ Duplicate service ids are rejected during parsing.
 
 ### `notifications`
 
-Notification settings.
+Notification settings include:
 
 - `gracePeriodMinutes`: optional suppression window before notifying
 - `providers`: array of provider definitions
 
-Supported provider shape:
+The supported provider shape is:
 
 - `type: 'webhook'`
 - `url`
@@ -66,14 +64,12 @@ Supported provider shape:
 - optional `secretName`, `secretHeader`, and `secretPrefix` for a Worker secret binding
 - optional `bodyTemplate`
 
-At the top level, `staleAfterMinutes` controls when the public page stops treating
-the latest check as current, and `retentionDays` controls historical D1 cleanup.
+At the top level, `staleAfterMinutes` sets how long the public page treats the
+latest check as current. `retentionDays` sets how long historical D1 data stays.
 
 ### `maintenances`
 
-Scheduled maintenance windows.
-
-Each entry includes:
+Scheduled maintenance windows use entries with:
 
 - `id`
 - `title`
@@ -143,24 +139,26 @@ TCP fields:
 
 ## Probe model
 
-Optional probe routing:
+Probes can route checks through:
 
 - `kind: 'local'`
 - `kind: 'region'`
 - `kind: 'proxy'`
 - optional `target` for region or proxy-specific routing
 
-Runtime behavior:
+At runtime:
 
 - `local` runs inside the Worker directly
 - `region` sends the check to the shared remote probe endpoint configured with `PULSEFLARE_REMOTE_PROBE_URL`
 - `proxy` sends the check to the full HTTP(S) URL stored in `probe.target`
 
-Remote probe requests are JSON `POST` calls with the original `check` and `probe` values. The response must be JSON with:
+Remote probe requests use JSON `POST` calls with the original `check` and `probe` values. Regional requests use a `Bearer` token from the `PULSEFLARE_REMOTE_PROBE_TOKEN` Worker secret and require an HTTPS endpoint. The response must be JSON with:
 
 - `status`: `up` or `down`
 - `reason`: string
-- optional `latencyMs`: number
+- optional `latencyMs`: non-negative integer no greater than 10 minutes
+
+Check history records the probe location. Regional labels are shown in the public snapshot as safe location summaries; proxy URLs are never returned to the public API.
 
 ## Full example
 
@@ -241,9 +239,9 @@ export default defineStatusConfig({
 })
 ```
 
-## Validation notes
+## Validation
 
-Validation checks:
+The parser checks that:
 
 - required string fields are present and non-empty
 - service ids are unique
@@ -253,11 +251,11 @@ Validation checks:
 
 When extending the schema, update the parser and [`packages/schema/src/config.test.ts`](../packages/schema/src/config.test.ts).
 
-## Runtime status
+## Runtime behavior
 
-Today:
+The Worker currently:
 
-- the Worker reads `config/pulse.config.ts` for the protected bootstrap install flow
+- reads `config/pulse.config.ts` for the protected bootstrap install flow
 - bootstrap and scheduled runs sync `services` from config into D1
 - scheduled runs execute HTTP and TCP checks from config and persist status/latency results
 - scheduled runs dispatch webhook notifications on incident open and resolve transitions
@@ -269,7 +267,7 @@ Today:
 - incidents require configurable consecutive failures and recoveries
 - webhook notifications are queued in D1 and retried asynchronously
 
-Later:
+Planned extensions:
 
 - notification delivery providers can be expanded beyond generic webhooks
-- optional external probes can add multi-region evidence
+- additional probe regions and routing options can add more multi-region evidence

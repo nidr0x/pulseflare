@@ -4,6 +4,7 @@ export type CheckRunResult = {
   status: 'up' | 'down'
   reason: string
   latencyMs?: number
+  locationLabel?: string
 }
 
 type Fetcher = typeof fetch
@@ -12,13 +13,9 @@ type TcpConnector = (address: { hostname: string; port: number }) => {
   close(): Promise<void>
 }
 
-type FetchResultShape = {
-  status?: unknown
-  reason?: unknown
-  latencyMs?: unknown
-}
-
 const MAX_RESPONSE_BODY_BYTES = 64 * 1024
+const DEFAULT_REMOTE_PROBE_TIMEOUT_MS = 15_000
+const MAX_REMOTE_LATENCY_MS = 10 * 60_000
 
 function formatExpectedStatuses(statuses: number[]): string {
   return statuses.join(', ')
@@ -133,21 +130,94 @@ function isRemoteProbeUrl(value: string): boolean {
   }
 }
 
+function isSecureRemoteProbeUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function getProbeLocationLabel(check: StatusCheck): string | undefined {
+  if (check.probe?.kind === 'proxy') {
+    return 'proxy'
+  }
+
+  if (check.probe?.kind !== 'region') {
+    return undefined
+  }
+
+  const target = (check.probe.target ?? 'unknown').trim().replace(/[^a-zA-Z0-9._:-]/g, '-').slice(0, 64)
+  return `region:${target || 'unknown'}`
+}
+
+function withLocationLabel(result: CheckRunResult, locationLabel: string | undefined): CheckRunResult {
+  return locationLabel ? { ...result, locationLabel } : result
+}
+
+function parseRemoteProbePayload(body: string): CheckRunResult | null {
+  let value: unknown
+
+  try {
+    value = JSON.parse(body)
+  } catch {
+    return null
+  }
+
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const payload = value as Record<string, unknown>
+  if (
+    (payload.status !== 'up' && payload.status !== 'down') ||
+    typeof payload.reason !== 'string' ||
+    payload.reason.trim().length === 0
+  ) {
+    return null
+  }
+
+  if (
+    payload.latencyMs !== undefined &&
+    (typeof payload.latencyMs !== 'number' ||
+      !Number.isFinite(payload.latencyMs) ||
+      !Number.isInteger(payload.latencyMs) ||
+      payload.latencyMs < 0 ||
+      payload.latencyMs > MAX_REMOTE_LATENCY_MS)
+  ) {
+    return null
+  }
+
+  return {
+    status: payload.status,
+    reason: payload.reason,
+    ...(payload.latencyMs === undefined ? {} : { latencyMs: payload.latencyMs }),
+  }
+}
+
 async function runRemoteProbe(
   check: StatusCheck,
   endpoint: string,
-  fetcher: Fetcher
+  fetcher: Fetcher,
+  authorizationToken?: string
 ): Promise<CheckRunResult> {
   try {
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+    }
+
+    if (authorizationToken) {
+      headers.authorization = `Bearer ${authorizationToken}`
+    }
+
     const response = await fetcher(endpoint, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         check,
         probe: check.probe,
       }),
+      signal: AbortSignal.timeout(check.timeoutMs ?? DEFAULT_REMOTE_PROBE_TIMEOUT_MS),
     })
 
     if (!response.ok) {
@@ -157,19 +227,15 @@ async function runRemoteProbe(
       }
     }
 
-    const payload = (await response.json()) as FetchResultShape
-    if (payload.status !== 'up' && payload.status !== 'down') {
+    const payload = parseRemoteProbePayload(await readResponseBody(response))
+    if (!payload) {
       return {
         status: 'down',
         reason: 'Remote probe returned an invalid status payload',
       }
     }
 
-    return {
-      status: payload.status,
-      reason: typeof payload.reason === 'string' ? payload.reason : 'Remote probe completed',
-      latencyMs: typeof payload.latencyMs === 'number' ? payload.latencyMs : undefined,
-    }
+    return payload
   } catch (error) {
     return {
       status: 'down',
@@ -182,28 +248,57 @@ export async function runConfiguredCheck(
   check: StatusCheck,
   fetcher: Fetcher = globalThis.fetch,
   tcpConnect?: TcpConnector,
-  remoteProbeUrl?: string
+  remoteProbeUrl?: string,
+  remoteProbeToken?: string
 ): Promise<CheckRunResult> {
+  const locationLabel = getProbeLocationLabel(check)
+
   if (check.probe?.kind === 'proxy') {
     if (!check.probe.target || !isRemoteProbeUrl(check.probe.target)) {
-      return {
-        status: 'down',
-        reason: 'Proxy probe target must be a valid HTTP(S) URL',
-      }
+      return withLocationLabel(
+        {
+          status: 'down',
+          reason: 'Proxy probe target must be a valid HTTP(S) URL',
+        },
+        locationLabel
+      )
     }
 
-    return runRemoteProbe(check, check.probe.target, fetcher)
+    return withLocationLabel(await runRemoteProbe(check, check.probe.target, fetcher), locationLabel)
   }
 
   if (check.probe?.kind === 'region') {
     if (!remoteProbeUrl) {
-      return {
-        status: 'down',
-        reason: `No shared remote probe endpoint configured for region probe ${check.probe.target ?? 'unknown'}`,
-      }
+      return withLocationLabel(
+        {
+          status: 'down',
+          reason: `No shared remote probe endpoint configured for region probe ${check.probe.target ?? 'unknown'}`,
+        },
+        locationLabel
+      )
     }
 
-    return runRemoteProbe(check, remoteProbeUrl, fetcher)
+    if (!isSecureRemoteProbeUrl(remoteProbeUrl)) {
+      return withLocationLabel(
+        {
+          status: 'down',
+          reason: 'Shared remote probe endpoint must use HTTPS',
+        },
+        locationLabel
+      )
+    }
+
+    if (!remoteProbeToken) {
+      return withLocationLabel(
+        {
+          status: 'down',
+          reason: `No shared remote probe token configured for region probe ${check.probe.target ?? 'unknown'}`,
+        },
+        locationLabel
+      )
+    }
+
+    return withLocationLabel(await runRemoteProbe(check, remoteProbeUrl, fetcher, remoteProbeToken), locationLabel)
   }
 
   if (check.type === 'tcp') {

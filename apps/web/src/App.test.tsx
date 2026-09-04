@@ -25,6 +25,66 @@ describe('App', () => {
     expect(html).not.toContain('Recent incidents')
   })
 
+  it('shows freshness age, stale duration, and a refresh action', () => {
+    const html = renderToStaticMarkup(
+      <HomePage
+        now={Date.parse('2026-04-25T08:10:00.000Z')}
+        onRetry={() => undefined}
+        snapshot={{
+          ...getInitialStatusSnapshot(),
+          summary: {
+            ...getInitialStatusSnapshot().summary,
+            checkedAt: '2026-04-25T08:01:00.000Z',
+            staleAfterMinutes: 5,
+          },
+        }}
+      />
+    )
+
+    expect(html).toContain('Last updated')
+    expect(html).toContain('Data is stale by 4 min')
+    expect(html).toContain('Refresh status')
+  })
+
+  it('shows a refresh action when snapshot loading fails', () => {
+    const html = renderToStaticMarkup(
+      <HomePage loadState="error" onRetry={() => undefined} snapshot={getInitialStatusSnapshot()} />
+    )
+
+    expect(html).toContain('Live status unavailable')
+    expect(html).toContain('Refresh status')
+  })
+
+  it('renders safe regional health evidence for a service', () => {
+    const html = renderToStaticMarkup(
+      <HomePage
+        snapshot={{
+          ...getInitialStatusSnapshot(),
+          services: [
+            {
+              id: 'api',
+              name: 'API',
+              group: 'Core',
+              status: 'operational',
+              uptimePercentage: 99.5,
+              latencyMs: 24,
+              history: ['up'],
+              notes: 'Last checked now',
+              locations: [
+                { label: 'iad', uptimePercentage: 100, history: ['up'] },
+                { label: 'fra', uptimePercentage: 99, history: ['degraded'] },
+              ],
+            },
+          ],
+        }}
+      />
+    )
+
+    expect(html).toContain('Regional health')
+    expect(html).toContain('iad')
+    expect(html).toContain('fra')
+  })
+
   it('renders the incidents route as the dedicated history view', () => {
     const html = renderToStaticMarkup(<IncidentsPage snapshot={getInitialStatusSnapshot()} />)
 

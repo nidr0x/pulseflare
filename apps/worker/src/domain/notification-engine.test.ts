@@ -111,14 +111,30 @@ describe('notification engine', () => {
       },
     ])
     const fetcher = vi.fn(async () => new Response(null, { status: 204 }))
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 
-    await dispatchPendingNotifications(database, config, fetcher, new Date('2026-04-25T08:05:00.000Z'))
+    await dispatchPendingNotifications(
+      database,
+      config,
+      fetcher,
+      new Date('2026-04-25T08:05:00.000Z'),
+      {},
+      logger
+    )
 
     expect(fetcher).toHaveBeenCalledWith(
       'https://hooks.example.com/status',
       expect.objectContaining({ method: 'POST' })
     )
     expect(runs.at(-1)).toEqual(['2026-04-25T08:05:00.000Z', 'outbox-1', expect.any(String)])
+    expect(JSON.parse(logger.info.mock.calls[0]?.[0])).toMatchObject({
+      component: 'pulseflare-worker',
+      event: 'notification.delivered',
+      notificationEvent: 'incident_opened',
+      providerId: 'ops',
+      incidentId: 'incident-1',
+      attempts: 1,
+    })
   })
 
   it('schedules a retry when a webhook fails', async () => {
@@ -134,8 +150,16 @@ describe('notification engine', () => {
       },
     ])
     const fetcher = vi.fn(async () => new Response(null, { status: 503 }))
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 
-    await dispatchPendingNotifications(database, config, fetcher, new Date('2026-04-25T08:05:00.000Z'))
+    await dispatchPendingNotifications(
+      database,
+      config,
+      fetcher,
+      new Date('2026-04-25T08:05:00.000Z'),
+      {},
+      logger
+    )
 
     expect(runs.at(-1)).toEqual([
       'retrying',
@@ -145,6 +169,15 @@ describe('notification engine', () => {
       'outbox-1',
       expect.any(String),
     ])
+    expect(JSON.parse(logger.error.mock.calls[0]?.[0])).toMatchObject({
+      component: 'pulseflare-worker',
+      event: 'notification.failed',
+      notificationEvent: 'incident_opened',
+      providerId: 'ops',
+      incidentId: 'incident-1',
+      attempts: 1,
+      status: 'retrying',
+    })
   })
 
   it('does not deliver an outbox row already claimed by another dispatcher', async () => {
