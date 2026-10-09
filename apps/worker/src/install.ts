@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS incidents (
   id TEXT PRIMARY KEY,
   service_id TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
   status TEXT NOT NULL CHECK (status IN ('open', 'resolved')),
+  impact TEXT NOT NULL DEFAULT 'minor' CHECK (impact IN ('minor', 'major')),
   latest_reason TEXT,
   opened_at TEXT NOT NULL,
   resolved_at TEXT,
@@ -50,6 +51,17 @@ CREATE TABLE IF NOT EXISTS check_results (
   reason TEXT NOT NULL,
   latency_ms INTEGER CHECK (latency_ms IS NULL OR latency_ms >= 0),
   location_label TEXT NOT NULL DEFAULT 'default'
+);
+
+CREATE TABLE IF NOT EXISTS daily_check_rollups (
+  service_id TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+  day TEXT NOT NULL,
+  location_label TEXT NOT NULL,
+  up_count INTEGER NOT NULL DEFAULT 0 CHECK (up_count >= 0),
+  down_count INTEGER NOT NULL DEFAULT 0 CHECK (down_count >= 0),
+  last_latency_ms INTEGER CHECK (last_latency_ms IS NULL OR last_latency_ms >= 0),
+  last_latency_at TEXT,
+  PRIMARY KEY (service_id, day, location_label)
 );
 
 CREATE TABLE IF NOT EXISTS notification_outbox (
@@ -83,12 +95,17 @@ CREATE TABLE IF NOT EXISTS scheduler_runs (
 CREATE TABLE IF NOT EXISTS scheduler_lease (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   locked_until TEXT NOT NULL,
-  owner_id TEXT
+  owner_id TEXT,
+  last_pruned_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS check_results_service_recorded_idx ON check_results(service_id, recorded_at);
+CREATE INDEX IF NOT EXISTS check_results_recorded_idx ON check_results(recorded_at);
+CREATE INDEX IF NOT EXISTS latency_points_recorded_idx ON latency_points(recorded_at);
+CREATE INDEX IF NOT EXISTS notification_outbox_created_status_idx ON notification_outbox(status, created_at);
 CREATE INDEX IF NOT EXISTS notification_outbox_pending_idx ON notification_outbox(status, next_attempt_at);
 CREATE INDEX IF NOT EXISTS scheduler_runs_started_idx ON scheduler_runs(started_at);
+CREATE INDEX IF NOT EXISTS daily_check_rollups_day_idx ON daily_check_rollups(day);
 CREATE UNIQUE INDEX IF NOT EXISTS incidents_one_open_per_service_idx
   ON incidents(service_id)
   WHERE status = 'open';

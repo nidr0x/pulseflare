@@ -305,6 +305,7 @@ h4 {
 .service-badge--degraded,
 .timeline-tag--monitoring,
 .timeline-tag--investigating,
+.timeline-tag--open,
 .timeline-tag--in_progress,
 .timeline-entry__marker--minor {
   color: var(--color-warn);

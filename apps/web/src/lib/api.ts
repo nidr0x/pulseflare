@@ -9,6 +9,7 @@ export type ServiceLocationRecord = {
   label: string
   uptimePercentage: number | null
   history: UptimeWindowState[]
+  latencyMs: number | null
 }
 
 export type ServiceRecord = {
@@ -26,7 +27,7 @@ export type ServiceRecord = {
 export type IncidentRecord = {
   id: string
   title: string
-  status: 'resolved' | 'monitoring' | 'investigating' | 'scheduled'
+  status: 'open' | 'resolved' | 'monitoring' | 'investigating' | 'scheduled'
   impact: 'minor' | 'major' | 'maintenance'
   startedAt: string
   resolvedAt?: string

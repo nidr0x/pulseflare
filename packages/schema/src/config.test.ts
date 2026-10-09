@@ -42,6 +42,44 @@ describe('status config', () => {
     expect(parseStatusConfig(config)).toMatchObject({ staleAfterMinutes: 5, retentionDays: 90 })
   })
 
+  it('accepts a regional majority policy and configured incident impact', () => {
+    const config = defineStatusConfig({
+      site: { name: 'Acme Status' },
+      services: [
+        {
+          id: 'api',
+          name: 'API',
+          failurePolicy: 'majority',
+          impact: 'major',
+          checks: [{ type: 'http', url: 'https://api.example.com', probe: { kind: 'region', target: 'iad' } }],
+        },
+      ],
+      notifications: { providers: [] },
+      maintenances: [],
+    })
+
+    expect(parseStatusConfig(config).services[0]).toMatchObject({ failurePolicy: 'majority', impact: 'major' })
+  })
+
+  it('rejects unsupported service failure policies and incident impacts', () => {
+    const service = {
+      id: 'api',
+      name: 'API',
+      checks: [{ type: 'http', url: 'https://api.example.com' }],
+    }
+
+    for (const invalid of [{ failurePolicy: 'best-effort' }, { impact: 'critical' }]) {
+      expect(() =>
+        parseStatusConfig({
+          site: { name: 'Acme Status' },
+          services: [{ ...service, ...invalid }],
+          notifications: { providers: [] },
+          maintenances: [],
+        })
+      ).toThrow(/invalid service api/i)
+    }
+  })
+
   it('rejects duplicate service ids', () => {
     expect(() =>
       parseStatusConfig({

@@ -53,6 +53,8 @@ export type StatusService = {
   id: string
   name: string
   group?: string
+  failurePolicy?: 'all' | 'majority'
+  impact?: 'minor' | 'major'
   failureThreshold?: number
   recoveryThreshold?: number
   checks: StatusCheck[]
@@ -360,6 +362,14 @@ export function parseStatusConfig(config: unknown): StatusConfig {
 
     if (service.group !== undefined) {
       assertNonEmptyString(service.group, `service ${service.id} group`)
+    }
+
+    if (service.failurePolicy !== undefined && service.failurePolicy !== 'all' && service.failurePolicy !== 'majority') {
+      throw new Error(`Invalid service ${service.id} failure policy`)
+    }
+
+    if (service.impact !== undefined && service.impact !== 'minor' && service.impact !== 'major') {
+      throw new Error(`Invalid service ${service.id} impact`)
     }
 
     if (service.failureThreshold !== undefined) {

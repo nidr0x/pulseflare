@@ -67,12 +67,12 @@ describe('App', () => {
               group: 'Core',
               status: 'operational',
               uptimePercentage: 99.5,
-              latencyMs: 24,
+              latencyMs: 38,
               history: ['up'],
               notes: 'Last checked now',
               locations: [
-                { label: 'iad', uptimePercentage: 100, history: ['up'] },
-                { label: 'fra', uptimePercentage: 99, history: ['degraded'] },
+                { label: 'iad', uptimePercentage: 100, history: ['up'], latencyMs: 28 },
+                { label: 'fra', uptimePercentage: 99, history: ['degraded'], latencyMs: 48 },
               ],
             },
           ],
@@ -83,6 +83,32 @@ describe('App', () => {
     expect(html).toContain('Regional health')
     expect(html).toContain('iad')
     expect(html).toContain('fra')
+    expect(html).toContain('38 ms median')
+    expect(html).toContain('48 ms')
+  })
+
+  it('renders generated incident state as open until it resolves', () => {
+    const html = renderToStaticMarkup(
+      <IncidentsPage
+        snapshot={{
+          ...getInitialStatusSnapshot(),
+          incidents: [
+            {
+              id: 'incident-1',
+              title: 'API incident',
+              status: 'open',
+              impact: 'minor',
+              startedAt: '2026-04-25T08:00:00.000Z',
+              summary: 'API is experiencing an issue.',
+              services: ['api'],
+            },
+          ],
+        }}
+      />
+    )
+
+    expect(html).toContain('open')
+    expect(html).toContain('timeline-tag--open')
   })
 
   it('renders the incidents route as the dedicated history view', () => {
