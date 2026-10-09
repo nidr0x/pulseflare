@@ -5,8 +5,9 @@ Pulseflare stays small: config in code, status data in D1, and deployment throug
 ## Completed
 
 - Use one canonical public snapshot API instead of demo UI state.
-- Calculate uptime history and retain latency data from persisted check results.
+- Calculate uptime and regional latency history from daily rollups, with retention cleanup.
 - Use thresholded incident transitions and retryable webhook notifications.
+- Support configurable regional failure policies and incident impact labels.
 - Protect bootstrap with a POST request and an Authorization header.
 - Add scheduler run leases and a health endpoint.
 - Add remote region and proxy probe execution.

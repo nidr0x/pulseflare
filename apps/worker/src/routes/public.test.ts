@@ -79,7 +79,7 @@ describe('/api/public/snapshot', () => {
 
     const database = {
       prepare(query: string) {
-        if (query.includes('FROM check_results')) {
+        if (query.includes('FROM daily_check_rollups')) {
           return {
             bind() {
               return {
@@ -88,15 +88,11 @@ describe('/api/public/snapshot', () => {
                     results: [
                       {
                         service_id: 'api',
-                        recorded_at: '2026-04-25T08:00:00.000Z',
-                        status: 'up',
+                        day: '2026-04-25',
+                        up_count: 1,
+                        down_count: 1,
                         location_label: 'region:iad',
-                      },
-                      {
-                        service_id: 'api',
-                        recorded_at: '2026-04-25T08:01:00.000Z',
-                        status: 'down',
-                        location_label: 'region:iad',
+                        last_latency_ms: 731,
                       },
                     ],
                   }
@@ -116,6 +112,7 @@ describe('/api/public/snapshot', () => {
                     service_id: 'api',
                     service_name: 'API',
                     status: 'open',
+                    impact: 'minor',
                     latest_reason: 'API failed',
                     opened_at: '2026-04-25T08:00:00.000Z',
                     resolved_at: null,
@@ -136,7 +133,6 @@ describe('/api/public/snapshot', () => {
                   service_group: 'Core',
                   current_status: 'down',
                   checked_at: '2026-04-25T08:01:00.000Z',
-                  latest_latency_ms: 731,
                 },
               ],
             }
@@ -162,7 +158,7 @@ describe('/api/public/snapshot', () => {
       product: { name: string }
       summary: { status: string; checkedAt: string }
       services: Array<{ uptimePercentage: number | null; history: string[] }>
-      incidents: Array<{ id: string; title: string; summary: string }>
+      incidents: Array<{ id: string; title: string; summary: string; status: string; impact: string }>
     }
 
     expect(response.status).toBe(200)
@@ -174,13 +170,16 @@ describe('/api/public/snapshot', () => {
     expect(payload.services[0]).toMatchObject({
       uptimePercentage: 50,
       history: expect.arrayContaining(['degraded']),
-      locations: [{ label: 'iad', uptimePercentage: 50 }],
+        latencyMs: 731,
+        locations: [{ label: 'iad', uptimePercentage: 50, latencyMs: 731 }],
     })
     expect(payload.incidents).toEqual([
       expect.objectContaining({
         id: 'incident-1',
         title: 'API incident',
         summary: 'API is experiencing an issue.',
+        status: 'open',
+        impact: 'minor',
       }),
     ])
     expect(JSON.stringify(payload)).not.toContain('API failed')
@@ -234,7 +233,7 @@ describe('/api/public/services', () => {
 
     const database = {
       prepare(query: string) {
-        if (query.includes('FROM check_results')) {
+        if (query.includes('FROM daily_check_rollups')) {
           return {
             bind() {
               return {
@@ -243,8 +242,11 @@ describe('/api/public/services', () => {
                     results: [
                       {
                         service_id: 'api',
-                        recorded_at: '2026-04-18T17:00:00.000Z',
-                        status: 'down',
+                        day: '2026-04-18',
+                        up_count: 0,
+                        down_count: 1,
+                        location_label: 'default',
+                        last_latency_ms: 731,
                       },
                     ],
                   }
@@ -266,7 +268,6 @@ describe('/api/public/services', () => {
                   service_group: 'Core',
                   current_status: 'down',
                   checked_at: '2026-04-18T17:00:00.000Z',
-                  latest_latency_ms: 731,
                 },
               ],
             }
@@ -314,6 +315,7 @@ describe('/api/public/incidents', () => {
                   service_id: 'api',
                   service_name: 'API',
                   status: 'resolved',
+                    impact: 'major',
                   latest_reason: 'Internal recovery detail',
                   opened_at: '2026-04-18T17:00:00.000Z',
                   resolved_at: '2026-04-18T17:08:00.000Z',
@@ -331,7 +333,7 @@ describe('/api/public/incidents', () => {
       {} as ExecutionContext
     )
     const payload = (await response.json()) as {
-      incidents: Array<{ id: string; title: string; status: string; services: string[] }>
+      incidents: Array<{ id: string; title: string; status: string; impact: string; services: string[] }>
     }
 
     expect(response.status).toBe(200)
@@ -341,6 +343,7 @@ describe('/api/public/incidents', () => {
         title: 'API recovered',
         summary: 'API has recovered.',
         status: 'resolved',
+        impact: 'major',
         services: ['api'],
       }),
     ])

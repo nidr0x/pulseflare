@@ -114,17 +114,7 @@ function prepareServiceStatus(
     )
 }
 
-function prepareCheckResult(
-  database: D1Database,
-  input: {
-    serviceId: string
-    recordedAt: string
-    status: 'up' | 'down'
-    reason: string
-    latencyMs?: number
-    locationLabel?: string
-  }
-): D1PreparedStatement {
+function prepareCheckResult(database: D1Database, input: CheckRunResult & { serviceId: string; recordedAt: string }): D1PreparedStatement {
   return database
     .prepare(
       `
@@ -143,39 +133,73 @@ function prepareCheckResult(
     )
 }
 
-function prepareLatencyPoint(
+function prepareDailyCheckRollup(
   database: D1Database,
-  input: { serviceId: string; recordedAt: string; latencyMs: number; locationLabel?: string }
+  input: {
+    serviceId: string
+    day: string
+    locationLabel: string
+    upCount: number
+    downCount: number
+    latencyMs: number | null
+    latencyAt: string | null
+  }
 ): D1PreparedStatement {
   return database
     .prepare(
       `
-        INSERT INTO latency_points (id, service_id, recorded_at, latency_ms, location_label)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO daily_check_rollups (
+          service_id, day, location_label, up_count, down_count, last_latency_ms, last_latency_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(service_id, day, location_label) DO UPDATE SET
+          up_count = daily_check_rollups.up_count + excluded.up_count,
+          down_count = daily_check_rollups.down_count + excluded.down_count,
+          last_latency_ms = CASE
+            WHEN excluded.last_latency_at IS NOT NULL
+              AND (daily_check_rollups.last_latency_at IS NULL
+                OR excluded.last_latency_at >= daily_check_rollups.last_latency_at)
+            THEN excluded.last_latency_ms
+            ELSE daily_check_rollups.last_latency_ms
+          END,
+          last_latency_at = CASE
+            WHEN excluded.last_latency_at IS NOT NULL
+              AND (daily_check_rollups.last_latency_at IS NULL
+                OR excluded.last_latency_at >= daily_check_rollups.last_latency_at)
+            THEN excluded.last_latency_at
+            ELSE daily_check_rollups.last_latency_at
+          END
       `
     )
     .bind(
-      crypto.randomUUID(),
       input.serviceId,
-      input.recordedAt,
+      input.day,
+      input.locationLabel,
+      input.upCount,
+      input.downCount,
       input.latencyMs,
-      input.locationLabel ?? 'default'
+      input.latencyAt
     )
 }
 
 function prepareOpenIncident(
   database: D1Database,
-  input: { id: string; serviceId: string; latestReason: string | null; openedAt: string }
+  input: {
+    id: string
+    serviceId: string
+    impact: StatusService['impact']
+    latestReason: string | null
+    openedAt: string
+  }
 ): D1PreparedStatement {
   return database
     .prepare(
       `
-        INSERT INTO incidents (id, service_id, status, latest_reason, opened_at, resolved_at)
-        VALUES (?, ?, ?, ?, ?, NULL)
+        INSERT INTO incidents (id, service_id, status, impact, latest_reason, opened_at, resolved_at)
+        VALUES (?, ?, ?, ?, ?, ?, NULL)
         ON CONFLICT DO NOTHING
       `
     )
-    .bind(input.id, input.serviceId, 'open', input.latestReason, input.openedAt)
+    .bind(input.id, input.serviceId, 'open', input.impact ?? 'minor', input.latestReason, input.openedAt)
 }
 
 function prepareResolveIncident(
@@ -193,25 +217,36 @@ function prepareResolveIncident(
     .bind(input.latestReason, input.resolvedAt, input.serviceId)
 }
 
-function summarizeServiceResults(results: CheckRunResult[]): ServiceCheckSummary {
-  const failed = results.find((result) => result.status === 'down')
+function summarizeServiceResults(
+  results: CheckRunResult[],
+  failurePolicy: StatusService['failurePolicy'] = 'all'
+): ServiceCheckSummary {
+  const locationHealth = new Map<string, boolean>()
 
-  if (failed) {
-    return {
-      status: 'down',
-      reason: failed.reason,
-      latencyMs: failed.latencyMs,
-      checks: results,
-    }
+  for (const result of results) {
+    const location = result.locationLabel ?? 'default'
+    locationHealth.set(location, (locationHealth.get(location) ?? true) && result.status === 'up')
   }
 
+  const healthyLocations = [...locationHealth.values()].filter(Boolean).length
+  const serviceIsUp =
+    failurePolicy === 'majority'
+      ? healthyLocations > locationHealth.size / 2
+      : healthyLocations === locationHealth.size
+  const failed = results.find((result) => result.status === 'down')
+
   const latencyValues = results
+    .filter((result) => result.status === 'up')
     .map((result) => result.latencyMs)
     .filter((value): value is number => typeof value === 'number')
 
   return {
-    status: 'up',
-    reason: results[0]?.reason ?? 'Check completed successfully',
+    status: serviceIsUp ? 'up' : 'down',
+    reason: serviceIsUp
+      ? failed
+        ? `${healthyLocations} of ${locationHealth.size} probe locations passed`
+        : (results[0]?.reason ?? 'Check completed successfully')
+      : (failed?.reason ?? 'No probe locations passed'),
     latencyMs:
       latencyValues.length > 0
         ? Math.round(latencyValues.reduce((sum, value) => sum + value, 0) / latencyValues.length)
@@ -232,7 +267,7 @@ async function runServiceChecks(
     results.push(await runConfiguredCheck(check, fetcher, undefined, remoteProbeUrl, remoteProbeToken))
   }
 
-  return summarizeServiceResults(results)
+  return summarizeServiceResults(results, service.failurePolicy)
 }
 
 async function runServiceChecksConcurrently(
@@ -386,16 +421,28 @@ function isServiceUnderActiveMaintenance(
   })
 }
 
+const PRUNE_INTERVAL_MS = 24 * 60 * 60_000
+
 async function pruneHistoricalData(database: D1Database, retentionDays: number, now: string): Promise<void> {
+  const lease = await database
+    .prepare('SELECT last_pruned_at FROM scheduler_lease WHERE id = 1')
+    .first<{ last_pruned_at: string | null }>()
+
+  if (lease?.last_pruned_at && Date.parse(now) - Date.parse(lease.last_pruned_at) < PRUNE_INTERVAL_MS) {
+    return
+  }
+
   const cutoff = new Date(Date.parse(now) - retentionDays * 24 * 60 * 60 * 1000).toISOString()
-  await database
-    .prepare('DELETE FROM check_results WHERE recorded_at < ?')
-    .bind(cutoff)
-    .run()
-  await database
-    .prepare('DELETE FROM latency_points WHERE recorded_at < ?')
-    .bind(cutoff)
-    .run()
+  await database.batch([
+    database.prepare('DELETE FROM check_results WHERE recorded_at < ?').bind(cutoff),
+    database.prepare('DELETE FROM latency_points WHERE recorded_at < ?').bind(cutoff),
+    database.prepare('DELETE FROM daily_check_rollups WHERE day < ?').bind(cutoff.slice(0, 10)),
+    database.prepare('DELETE FROM scheduler_runs WHERE started_at < ?').bind(cutoff),
+    database
+      .prepare("DELETE FROM notification_outbox WHERE created_at < ? AND status IN ('delivered', 'failed')")
+      .bind(cutoff),
+    database.prepare('UPDATE scheduler_lease SET last_pruned_at = ? WHERE id = 1').bind(now),
+  ])
 }
 
 async function startSchedulerRun(database: D1Database, id: string, startedAt: string): Promise<void> {
@@ -588,28 +635,52 @@ export async function runScheduledChecks(
         }),
       ]
 
+      const checkCountsByLocation = new Map<
+        string,
+        { upCount: number; downCount: number; latencies: number[] }
+      >()
+
       for (const checkResult of result.checks) {
-        statements.push(
-          prepareCheckResult(database, {
-            serviceId: service.id,
-            recordedAt: checkedAt,
-            status: checkResult.status,
-            reason: checkResult.reason,
-            latencyMs: checkResult.latencyMs,
-            locationLabel: checkResult.locationLabel,
-          })
-        )
+        const locationLabel = checkResult.locationLabel ?? 'default'
+        const locationCounts = checkCountsByLocation.get(locationLabel) ?? {
+          upCount: 0,
+          downCount: 0,
+          latencies: [],
+        }
+        locationCounts[checkResult.status === 'up' ? 'upCount' : 'downCount'] += 1
 
         if (typeof checkResult.latencyMs === 'number') {
+          locationCounts.latencies.push(checkResult.latencyMs)
+        }
+
+        checkCountsByLocation.set(locationLabel, locationCounts)
+
+        if (checkResult.status === 'down') {
           statements.push(
-            prepareLatencyPoint(database, {
+            prepareCheckResult(database, {
+              ...checkResult,
               serviceId: service.id,
               recordedAt: checkedAt,
-              latencyMs: checkResult.latencyMs,
-              locationLabel: checkResult.locationLabel,
             })
           )
         }
+      }
+
+      for (const [locationLabel, counts] of checkCountsByLocation) {
+        statements.push(
+          prepareDailyCheckRollup(database, {
+            serviceId: service.id,
+            day: checkedAt.slice(0, 10),
+            locationLabel,
+            upCount: counts.upCount,
+            downCount: counts.downCount,
+            latencyMs:
+              counts.latencies.length > 0
+                ? Math.round(counts.latencies.reduce((sum, value) => sum + value, 0) / counts.latencies.length)
+                : null,
+            latencyAt: counts.latencies.length > 0 ? checkedAt : null,
+          })
+        )
       }
 
       const suppressOpenNotification =
@@ -620,6 +691,7 @@ export async function runScheduledChecks(
           prepareOpenIncident(database, {
             id: crypto.randomUUID(),
             serviceId: service.id,
+            impact: service.impact,
             latestReason: mutation.latestReason,
             openedAt: checkedAt,
           })

@@ -42,6 +42,8 @@ Services to monitor. Each service includes:
 - `id`: required stable identifier
 - `name`: required display name
 - `group`: optional visual grouping label
+- `failurePolicy`: optional regional aggregation policy; defaults to `'all'`, or set to `'majority'` to keep the service up when strictly more than half of probe locations pass
+- `impact`: optional incident impact label (`'minor'` or `'major'`); defaults to `'minor'`
 - `failureThreshold`: optional consecutive failures required to open an incident; defaults to `2`
 - `recoveryThreshold`: optional consecutive successes required to resolve an incident; defaults to `2`
 - `checks`: one or more monitoring checks
@@ -65,7 +67,10 @@ The supported provider shape is:
 - optional `bodyTemplate`
 
 At the top level, `staleAfterMinutes` sets how long the public page treats the
-latest check as current. `retentionDays` sets how long historical D1 data stays.
+latest check as current. `retentionDays` sets how long historical D1 data stays;
+the scheduler prunes expired records at most once per day. Public history uses
+daily per-location rollups, while raw check details are retained for failed
+probes only.
 
 ### `maintenances`
 

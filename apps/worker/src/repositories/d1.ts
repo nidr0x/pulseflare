@@ -4,7 +4,6 @@ export type PublicServiceStatusRecord = {
   group: string | null
   status: 'up' | 'down' | 'unknown'
   checkedAt: string | null
-  latencyMs: number | null
 }
 
 export type PublicServiceHistoryRecord = {
@@ -17,6 +16,7 @@ export type PublicServiceLocationRecord = {
   label: string
   uptimePercentage: number | null
   history: Array<'up' | 'degraded' | 'down' | 'unknown'>
+  latencyMs: number | null
 }
 
 export type PublicIncidentRecord = {
@@ -24,6 +24,7 @@ export type PublicIncidentRecord = {
   serviceId: string
   serviceName: string
   status: 'open' | 'resolved'
+  impact: 'minor' | 'major'
   openedAt: string
   resolvedAt: string | null
 }
@@ -45,14 +46,15 @@ type D1Row = {
   service_group: string | null
   current_status: string | null
   checked_at: string | null
-  latest_latency_ms: number | null
 }
 
-type CheckResultD1Row = {
+type DailyCheckRollupD1Row = {
   service_id: string
-  recorded_at: string
-  status: 'up' | 'down'
-  location_label?: string | null
+  day: string
+  location_label: string
+  up_count: number
+  down_count: number
+  last_latency_ms: number | null
 }
 
 type D1Result<T> = {
@@ -64,6 +66,7 @@ type IncidentD1Row = {
   service_id: string
   service_name: string
   status: string
+  impact: string
   opened_at: string
   resolved_at: string | null
 }
@@ -98,14 +101,7 @@ export async function listPublicServiceStatuses(database: D1Database): Promise<P
       services.name,
       services.service_group,
       service_status.current_status,
-      service_status.checked_at,
-      (
-        SELECT latency_points.latency_ms
-        FROM latency_points
-        WHERE latency_points.service_id = services.id
-        ORDER BY latency_points.recorded_at DESC
-        LIMIT 1
-      ) AS latest_latency_ms
+      service_status.checked_at
     FROM services
     LEFT JOIN service_status ON service_status.service_id = services.id
     WHERE services.is_active = 1
@@ -120,7 +116,6 @@ export async function listPublicServiceStatuses(database: D1Database): Promise<P
     group: row.service_group,
     status: mapCurrentStatus(row.current_status),
     checkedAt: row.checked_at,
-    latencyMs: row.latest_latency_ms,
   }))
 }
 
@@ -142,9 +137,10 @@ function getHistoryDays(now: Date, days: number): string[] {
 type DayCounts = { up: number; down: number }
 type DayHistory = Map<string, DayCounts>
 
-function incrementDayCount(days: DayHistory, day: string, status: 'up' | 'down'): void {
+function addDayCounts(days: DayHistory, day: string, up: number, down: number): void {
   const counts = days.get(day) ?? { up: 0, down: 0 }
-  counts[status] += 1
+  counts.up += up
+  counts.down += down
   days.set(day, counts)
 }
 
@@ -200,33 +196,41 @@ export async function getPublicServiceHistory(
   days = 90
 ): Promise<Map<string, PublicServiceHistoryRecord>> {
   const dayKeys = getHistoryDays(now, days)
-  const cutoff = `${dayKeys[0]}T00:00:00.000Z`
+  const cutoff = dayKeys[0]
   const result = (await database
     .prepare(
       `
-        SELECT service_id, recorded_at, status, location_label
-        FROM check_results
-        WHERE recorded_at >= ?
-        ORDER BY recorded_at ASC
+        SELECT service_id, day, location_label, up_count, down_count, last_latency_ms
+        FROM daily_check_rollups
+        WHERE day >= ?
+        ORDER BY day DESC, location_label ASC
       `
     )
     .bind(cutoff)
-    .all()) as D1Result<CheckResultD1Row>
+    .all()) as D1Result<DailyCheckRollupD1Row>
 
-  const grouped = new Map<string, { aggregate: DayHistory; locations: Map<string, DayHistory> }>()
+  const grouped = new Map<
+    string,
+    { aggregate: DayHistory; locations: Map<string, { days: DayHistory; latencyMs: number | null }> }
+  >()
 
   for (const row of result.results ?? []) {
-    const day = row.recorded_at.slice(0, 10)
     const serviceHistory = grouped.get(row.service_id) ?? {
       aggregate: new Map<string, DayCounts>(),
-      locations: new Map<string, DayHistory>(),
+      locations: new Map<string, { days: DayHistory; latencyMs: number | null }>(),
     }
     const locationLabel = row.location_label?.trim() || 'default'
-    const locationDays = serviceHistory.locations.get(locationLabel) ?? new Map<string, DayCounts>()
+    const location = serviceHistory.locations.get(locationLabel) ?? {
+      days: new Map<string, DayCounts>(),
+      latencyMs: null,
+    }
 
-    incrementDayCount(serviceHistory.aggregate, day, row.status)
-    incrementDayCount(locationDays, day, row.status)
-    serviceHistory.locations.set(locationLabel, locationDays)
+    addDayCounts(serviceHistory.aggregate, row.day, row.up_count, row.down_count)
+    addDayCounts(location.days, row.day, row.up_count, row.down_count)
+    if (location.latencyMs === null && row.last_latency_ms !== null) {
+      location.latencyMs = row.last_latency_ms
+    }
+    serviceHistory.locations.set(locationLabel, location)
     grouped.set(row.service_id, serviceHistory)
   }
 
@@ -234,9 +238,10 @@ export async function getPublicServiceHistory(
     [...grouped.entries()].map(([serviceId, serviceHistory]) => {
       const aggregate = summarizeDayHistory(dayKeys, serviceHistory.aggregate)
       const locations = [...serviceHistory.locations.entries()]
-        .map(([label, dayCounts]) => ({
+        .map(([label, location]) => ({
           label: mapPublicLocationLabel(label),
-          ...summarizeDayHistory(dayKeys, dayCounts),
+          ...summarizeDayHistory(dayKeys, location.days),
+          latencyMs: location.latencyMs,
         }))
         .sort((left, right) => left.label.localeCompare(right.label))
 
@@ -259,6 +264,14 @@ function mapIncidentStatus(status: string): PublicIncidentRecord['status'] {
   throw new Error(`Unexpected incident status value: ${status}`)
 }
 
+function mapIncidentImpact(impact: string): PublicIncidentRecord['impact'] {
+  if (impact === 'minor' || impact === 'major') {
+    return impact
+  }
+
+  throw new Error(`Unexpected incident impact value: ${impact}`)
+}
+
 export async function listPublicIncidents(database: D1Database): Promise<PublicIncidentRecord[]> {
   const statement = database.prepare(`
     SELECT
@@ -266,6 +279,7 @@ export async function listPublicIncidents(database: D1Database): Promise<PublicI
       incidents.service_id,
       services.name AS service_name,
       incidents.status,
+      incidents.impact,
       incidents.opened_at,
       incidents.resolved_at
     FROM incidents
@@ -281,6 +295,7 @@ export async function listPublicIncidents(database: D1Database): Promise<PublicI
     serviceId: row.service_id,
     serviceName: row.service_name,
     status: mapIncidentStatus(row.status),
+    impact: mapIncidentImpact(row.impact),
     openedAt: row.opened_at,
     resolvedAt: row.resolved_at,
   }))

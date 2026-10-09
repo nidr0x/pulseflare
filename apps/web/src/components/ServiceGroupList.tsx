@@ -43,7 +43,7 @@ export function ServiceGroupList({ services }: ServiceGroupListProps) {
           <p className="eyebrow">Live status</p>
           <h2>Uptime over the last 90 days</h2>
         </div>
-        <p>Each row shows current state, latest response time, and a compact uptime timeline.</p>
+        <p>Each row shows current state, median regional response time, and a compact uptime timeline.</p>
       </div>
 
       <div className="service-groups">
@@ -68,7 +68,7 @@ export function ServiceGroupList({ services }: ServiceGroupListProps) {
                         <strong>
                           {service.uptimePercentage === null ? '--' : formatUptime(service.uptimePercentage)}
                         </strong>
-                        <span>{service.latencyMs === null ? '--' : `${service.latencyMs} ms`}</span>
+                        <span>{service.latencyMs === null ? '--' : `${service.latencyMs} ms median`}</span>
                         <span className={`service-badge service-badge--${service.status}`}>
                           {formatState(service.status)}
                         </span>
@@ -101,6 +101,7 @@ export function ServiceGroupList({ services }: ServiceGroupListProps) {
                                   ? '--'
                                   : formatUptime(location.uptimePercentage)}
                               </strong>
+                              <span>{location.latencyMs === null ? '--' : `${location.latencyMs} ms`}</span>
                             </span>
                           )
                         })}

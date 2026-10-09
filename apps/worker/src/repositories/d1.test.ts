@@ -18,7 +18,6 @@ describe('listPublicServiceStatuses', () => {
                   service_group: 'Core',
                   current_status: null,
                   checked_at: null,
-                  latest_latency_ms: null,
                 },
               ],
             }
@@ -34,7 +33,6 @@ describe('listPublicServiceStatuses', () => {
         group: 'Core',
         status: 'unknown',
         checkedAt: null,
-        latencyMs: null,
       },
     ])
   })
@@ -52,7 +50,6 @@ describe('listPublicServiceStatuses', () => {
                   service_group: null,
                   current_status: 'down',
                   checked_at: '2026-04-18T17:00:00.000Z',
-                  latest_latency_ms: 842,
                 },
               ],
             }
@@ -68,7 +65,6 @@ describe('listPublicServiceStatuses', () => {
         group: null,
         status: 'down',
         checkedAt: '2026-04-18T17:00:00.000Z',
-        latencyMs: 842,
       },
     ])
   })
@@ -86,7 +82,6 @@ describe('listPublicServiceStatuses', () => {
                   service_group: null,
                   current_status: 'degraded',
                   checked_at: '2026-04-18T17:00:00.000Z',
-                  latest_latency_ms: 99,
                 },
               ],
             }
@@ -102,10 +97,10 @@ describe('listPublicServiceStatuses', () => {
 })
 
 describe('getPublicServiceHistory', () => {
-  it('aggregates persisted check results into daily and location windows', async () => {
+  it('reads daily rollups and exposes the latest latency per location', async () => {
     const database = {
       prepare(query: string) {
-        expect(query).toContain('FROM check_results')
+        expect(query).toContain('FROM daily_check_rollups')
 
         return {
           bind() {
@@ -115,33 +110,35 @@ describe('getPublicServiceHistory', () => {
                   results: [
                     {
                       service_id: 'api',
-                      recorded_at: '2026-04-25T08:00:00.000Z',
-                      status: 'up',
+                      day: '2026-04-25',
+                      up_count: 1,
+                      down_count: 1,
                       location_label: 'region:iad',
+                      last_latency_ms: 45,
                     },
                     {
                       service_id: 'api',
-                      recorded_at: '2026-04-25T08:01:00.000Z',
-                      status: 'down',
-                      location_label: 'region:iad',
-                    },
-                    {
-                      service_id: 'api',
-                      recorded_at: '2026-04-25T08:02:00.000Z',
-                      status: 'up',
+                      day: '2026-04-25',
+                      up_count: 1,
+                      down_count: 0,
                       location_label: 'region:fra',
+                      last_latency_ms: 31,
                     },
                     {
                       service_id: 'api',
-                      recorded_at: '2026-04-24T08:00:00.000Z',
-                      status: 'up',
+                      day: '2026-04-24',
+                      up_count: 1,
+                      down_count: 0,
                       location_label: 'region:iad',
+                      last_latency_ms: 40,
                     },
                     {
                       service_id: 'api',
-                      recorded_at: '2026-04-24T08:01:00.000Z',
-                      status: 'up',
+                      day: '2026-04-24',
+                      up_count: 1,
+                      down_count: 0,
                       location_label: 'region:fra',
+                      last_latency_ms: 28,
                     },
                   ],
                 }
@@ -162,8 +159,8 @@ describe('getPublicServiceHistory', () => {
       uptimePercentage: 80,
       history: ['up', 'degraded'],
       locations: [
-        { label: 'fra', uptimePercentage: 100, history: ['up', 'up'] },
-        { label: 'iad', uptimePercentage: 66.67, history: ['up', 'degraded'] },
+        { label: 'fra', uptimePercentage: 100, history: ['up', 'up'], latencyMs: 31 },
+        { label: 'iad', uptimePercentage: 66.67, history: ['up', 'degraded'], latencyMs: 45 },
       ],
     })
   })
