@@ -21,7 +21,7 @@ packages/
 - a protected `/api/install/bootstrap` route that creates the base D1 schema and seeds services from checked-in config
 - a React status site built into Worker static assets
 - config-file schema validation
-- D1 migrations for services, current status, location-aware check results, incidents, latency, and notification outbox records
+- D1 migrations for services, current status, failed check details, daily regional rollups, incidents, and notification outbox records
 - bounded scheduled check concurrency, stale-state detection, incident thresholds, and retention cleanup
 - shared summary logic in `@pulseflare/core`
 
@@ -99,8 +99,8 @@ The runtime path is:
 
 1. Services declare one or more checks in config.
 2. Scheduled Worker runs evaluate HTTP and TCP checks and normalize results.
-3. D1 stores the latest service status, every individually labeled check result, open or resolved incidents, location-aware latency points, and notification jobs.
-4. Consecutive failure and recovery thresholds determine incident transitions.
+3. D1 stores the latest service status, failed check details, daily per-location counts and latency, open or resolved incidents, and notification jobs.
+4. The configured regional failure policy and consecutive failure/recovery thresholds determine incident transitions.
 5. Webhook jobs respect the notification grace period and retry with backoff.
 6. Public APIs read from persisted state instead of exposing storage internals directly.
 
@@ -116,11 +116,12 @@ The D1 schema starts with [`apps/worker/migrations/0001_initial.sql`](../apps/wo
 Later migrations add:
 
 - `check_results`
+- `daily_check_rollups`
 - `notification_outbox`
 - `scheduler_runs`
 - `scheduler_lease`
 
-Public summaries and incident history remain queryable without a single serialized state blob. The public snapshot keeps the aggregate history contract and adds safe per-location history for regional and proxy checks.
+Public summaries and incident history remain queryable without a single serialized state blob. Daily rollups power aggregate and per-location history; raw failure details and completed notification jobs are pruned according to configured retention, with cleanup scheduled at most once per day. Public latency is the median across reporting probe locations.
 
 ## Project constraints
 

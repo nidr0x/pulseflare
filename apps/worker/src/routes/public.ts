@@ -117,6 +117,22 @@ function getServiceNotes(
   return `Last checked ${checkedAt}`
 }
 
+function getMedianLatency(locations: PublicServiceHistoryRecord['locations']): number | null {
+  const values = locations
+    .map((location) => location.latencyMs)
+    .filter((value): value is number => typeof value === 'number')
+    .sort((left, right) => left - right)
+
+  if (values.length === 0) {
+    return null
+  }
+
+  const middle = Math.floor(values.length / 2)
+  return values.length % 2 === 1
+    ? values[middle]
+    : Math.round((values[middle - 1] + values[middle]) / 2)
+}
+
 function buildServicePayload(
   service: StatusService,
   statusRecord: PublicServiceStatusRecord | undefined,
@@ -133,7 +149,7 @@ function buildServicePayload(
     group: service.group ?? null,
     status,
     uptimePercentage: historyRecord?.uptimePercentage ?? null,
-    latencyMs: statusRecord?.latencyMs ?? null,
+    latencyMs: getMedianLatency(historyRecord?.locations ?? []),
     history: historyRecord?.history ?? Array.from({ length: HISTORY_WINDOW_DAYS }, () => 'unknown' as const),
     locations: historyRecord?.locations ?? [],
     notes: getServiceNotes(service, status, statusRecord?.checkedAt, stale),
@@ -196,8 +212,8 @@ function buildIncidentPayload(incidents: Awaited<ReturnType<typeof listPublicInc
     return {
       id: incident.id,
       title: resolved ? `${incident.serviceName} recovered` : `${incident.serviceName} incident`,
-      status: resolved ? 'resolved' : 'investigating',
-      impact: 'major',
+      status: resolved ? 'resolved' : 'open',
+      impact: incident.impact,
       startedAt: incident.openedAt,
       resolvedAt: incident.resolvedAt ?? undefined,
       summary: resolved
