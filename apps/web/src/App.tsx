@@ -46,6 +46,11 @@ export default function App() {
     const scheduleUpdate = (delay: number) => {
       if (timerId !== undefined) {
         window.clearTimeout(timerId)
+        timerId = undefined
+      }
+
+      if (document.visibilityState !== 'visible') {
+        return
       }
 
       timerId = window.setTimeout(() => {
@@ -64,7 +69,7 @@ export default function App() {
         setSnapshotLoadState('loading')
       })
 
-      let nextDelay = 30_000
+      let nextDelay = 60_000
 
       try {
         const nextSnapshot = await getStatusSnapshot()
@@ -99,13 +104,19 @@ export default function App() {
 
     const handleVisibilityChange = () => {
       if (document.visibilityState !== 'visible') {
+        if (timerId !== undefined) {
+          window.clearTimeout(timerId)
+          timerId = undefined
+        }
         return
       }
 
       void updateSnapshot()
     }
 
-    void updateSnapshot()
+    if (document.visibilityState === 'visible') {
+      void updateSnapshot()
+    }
     window.addEventListener('popstate', handleNavigation)
     document.addEventListener('visibilitychange', handleVisibilityChange)
 

@@ -56,6 +56,9 @@ describe('worker routing', () => {
           },
           prepare(query: string) {
             return {
+              async all() {
+                return { results: [] }
+              },
               async first() {
                 if (query.includes('SELECT last_pruned_at FROM scheduler_lease')) {
                   return { last_pruned_at: null }

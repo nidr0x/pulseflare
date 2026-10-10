@@ -134,6 +134,26 @@ export async function countServices(database: D1Database): Promise<number> {
 }
 
 export async function syncServices(database: D1Database, config: StatusConfig): Promise<void> {
+  const { results: activeServices } = await database
+    .prepare('SELECT id, name, service_group, sort_order FROM services WHERE is_active = 1')
+    .all<{ id: string; name: string; service_group: string | null; sort_order: number }>()
+  const activeServicesById = new Map(activeServices.map((service) => [service.id, service]))
+
+  if (
+    activeServices.length === config.services.length &&
+    config.services.every((service, index) => {
+      const activeService = activeServicesById.get(service.id)
+
+      return (
+        activeService?.name === service.name &&
+        activeService.service_group === (service.group ?? null) &&
+        activeService.sort_order === index
+      )
+    })
+  ) {
+    return
+  }
+
   const statements = [database.prepare('UPDATE services SET is_active = 0').bind()]
 
   for (const [index, service] of config.services.entries()) {
