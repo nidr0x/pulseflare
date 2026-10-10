@@ -20,6 +20,10 @@ class FakePreparedStatement {
     return new FakePreparedStatement(this.database, this.sql, params)
   }
 
+  async all(): Promise<{ results: ServiceRow[] }> {
+    return { results: this.database.services }
+  }
+
   async first(): Promise<Record<string, unknown>> {
     if (this.sql.includes('SELECT COUNT(*) AS service_count FROM services')) {
       return { service_count: this.database.services.length }

@@ -1,7 +1,7 @@
 import type { StatusService } from '@pulseflare/schema'
 
 import { getRemoteProbeToken, getRemoteProbeUrl, getWorkerDatabase, getWorkerSecret } from '../config'
-import { ensureBootstrapSchema, getRuntimeConfig, syncServices } from '../install'
+import { getRuntimeConfig, syncServices } from '../install'
 import { runConfiguredCheck, type CheckRunResult } from './check-runner'
 import { deriveIncidentMutation, type IncidentMutation } from './incident-engine'
 import { emitObservabilityEvent, getObservabilityError, type ObservabilityLogger } from '../observability'
@@ -558,7 +558,6 @@ export async function runScheduledChecks(
     servicesConfigured: config.services.length,
   }, logger)
 
-  await ensureBootstrapSchema(database)
   if (!(await acquireSchedulerLease(database, checkedAt, runId))) {
     emitObservabilityEvent('info', 'scheduler.run.skipped', { runId, reason: 'lease_not_acquired' }, logger)
     return { servicesChecked: 0, upCount: 0, downCount: 0 }

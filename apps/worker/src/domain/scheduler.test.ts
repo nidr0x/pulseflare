@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 
 import worker from '../index'
+import { BOOTSTRAP_SCHEMA_SQL } from '../install'
 import { runScheduledChecks } from './scheduler'
 import * as checkRunnerModule from './check-runner'
 import type { ObservabilityLogger } from '../observability'
@@ -11,6 +12,7 @@ type ServiceRow = {
   name: string
   service_group: string | null
   sort_order: number
+  is_active?: number
 }
 
 type StatusRow = {
@@ -57,16 +59,29 @@ function createFakeDatabase(initial?: {
     }>,
     lastPrunedAt: null as string | null,
     pruneRuns: 0,
+    execCalls: 0,
     batchCalls: [] as number[],
     forceIncidentConflict: initial?.forceIncidentConflict ?? false,
   }
 
   const database = {
     async exec() {
+      state.execCalls += 1
       return undefined
     },
     prepare(query: string) {
       return {
+        async all() {
+          if (query.includes('FROM services') && query.includes('WHERE is_active = 1')) {
+            return {
+              results: state.services
+                .filter((service) => service.is_active !== 0)
+                .map(({ id, name, service_group, sort_order }) => ({ id, name, service_group, sort_order })),
+            }
+          }
+
+          return { results: [] }
+        },
         async first() {
           if (query.includes('FROM scheduler_lease') && query.includes('last_pruned_at')) {
             return { last_pruned_at: state.lastPrunedAt }
@@ -77,7 +92,19 @@ function createFakeDatabase(initial?: {
         bind(...args: unknown[]) {
           return {
             async all() {
-              return { results: query.includes('FROM notification_outbox') ? state.notifications : [] }
+              if (query.includes('FROM notification_outbox')) {
+                return { results: state.notifications }
+              }
+
+              if (query.includes('FROM services') && query.includes('WHERE is_active = 1')) {
+                return {
+                  results: state.services
+                    .filter((service) => service.is_active !== 0)
+                    .map(({ id, name, service_group, sort_order }) => ({ id, name, service_group, sort_order })),
+                }
+              }
+
+              return { results: [] }
             },
             async run() {
               if (query.includes('INSERT INTO notification_outbox')) {
@@ -108,6 +135,9 @@ function createFakeDatabase(initial?: {
               }
 
               if (query.includes('UPDATE services SET is_active = 0')) {
+                for (const service of state.services) {
+                  service.is_active = 0
+                }
                 return
               }
 
@@ -118,12 +148,14 @@ function createFakeDatabase(initial?: {
                   existing.name = name
                   existing.service_group = group
                   existing.sort_order = sortOrder
+                  existing.is_active = 1
                 } else {
                   state.services.push({
                     id,
                     name,
                     service_group: group,
                     sort_order: sortOrder,
+                    is_active: 1,
                   })
                 }
                 return
@@ -288,7 +320,7 @@ function createFakeDatabase(initial?: {
               }
 
               if (query.includes('SELECT COUNT(*) AS service_count FROM services')) {
-                return { service_count: state.services.length }
+                return { service_count: state.services.filter((service) => service.is_active !== 0).length }
               }
 
               if (query.includes('FROM incidents') && query.includes("status = 'open'")) {
@@ -343,6 +375,7 @@ function createTestLogger() {
 
 function createSqliteDatabase() {
   const sqlite = new DatabaseSync(':memory:')
+  sqlite.exec(BOOTSTRAP_SCHEMA_SQL)
   const database = {
     async exec(query: string) {
       sqlite.exec(query)
@@ -422,6 +455,7 @@ describe('runScheduledChecks', () => {
       downCount: 0,
     })
     expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(state.execCalls).toBe(0)
     expect(state.statuses).toEqual([
       {
         service_id: 'api',

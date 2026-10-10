@@ -35,6 +35,14 @@ class FakePreparedStatement {
     return new FakePreparedStatement(this.database, this.sql, params)
   }
 
+  async all(): Promise<{ results: ServiceRow[] }> {
+    return {
+      results: this.database.services
+        .filter((service) => service.is_active === 1)
+        .map(({ id, name, service_group, sort_order }) => ({ id, name, service_group, sort_order, is_active: 1 })),
+    }
+  }
+
   async run(): Promise<Record<string, unknown>> {
     if (this.sql.includes('UPDATE services SET is_active = 0')) {
       for (const service of this.database.services) {
@@ -121,6 +129,17 @@ const config = {
 } satisfies StatusConfig
 
 describe('syncServices', () => {
+  it('skips the D1 batch when active services already match the config', async () => {
+    const database = new FakeD1Database([
+      { id: 'api', name: 'Public API v2', service_group: 'Platform', sort_order: 0, is_active: 1 },
+      { id: 'dashboard', name: 'Dashboard', service_group: null, sort_order: 1, is_active: 1 },
+    ])
+
+    await syncServices(database as unknown as D1Database, config)
+
+    expect(database.batchCalls).toBe(0)
+  })
+
   it('syncs active services and archives removed services atomically', async () => {
     const database = new FakeD1Database([
       { id: 'api', name: 'Old API', service_group: null, sort_order: 4, is_active: 1 },
