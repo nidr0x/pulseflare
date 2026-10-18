@@ -5,6 +5,17 @@ export const DEFAULT_STALE_AFTER_MINUTES = 5
 export type ServiceState = 'operational' | 'degraded' | 'outage' | 'unknown'
 export type UptimeWindowState = 'up' | 'degraded' | 'down' | 'unknown'
 
+export type StatusProduct = {
+  name: string
+  strapline?: string
+  description: string
+  logo?: string
+  icon?: string
+  navigation?: Array<{ label: string; href: string }>
+}
+
+export type PublicServiceOption = { id: string; name: string }
+
 export type ServiceLocationRecord = {
   label: string
   uptimePercentage: number | null
@@ -20,6 +31,7 @@ export type ServiceRecord = {
   uptimePercentage: number | null
   latencyMs: number | null
   history: UptimeWindowState[]
+  historyDays?: string[]
   locations: ServiceLocationRecord[]
   notes: string
 }
@@ -46,11 +58,7 @@ export type MaintenanceRecord = {
 }
 
 export type StatusSnapshot = {
-  product: {
-    name: string
-    strapline?: string
-    description: string
-  }
+  product: StatusProduct
   summary: {
     status: SummaryState
     checkedAt: string | null
@@ -64,6 +72,13 @@ export type StatusSnapshot = {
   maintenance: MaintenanceRecord[]
 }
 
+export type IncidentPageData = {
+  product: StatusProduct
+  services: PublicServiceOption[]
+  incidents: IncidentRecord[]
+  maintenance: MaintenanceRecord[]
+}
+
 export type PublicSummaryPayload = StatusSnapshot['summary']
 export type PublicSnapshotPayload = StatusSnapshot
 
@@ -71,6 +86,7 @@ export const EMPTY_STATUS_SNAPSHOT: StatusSnapshot = {
   product: {
     name: 'Status',
     description: 'Waiting for live status data.',
+    navigation: [],
   },
   summary: {
     status: 'unknown',
@@ -79,6 +95,17 @@ export const EMPTY_STATUS_SNAPSHOT: StatusSnapshot = {
     upCount: 0,
     downCount: 0,
     totalCount: 0,
+  },
+  services: [],
+  incidents: [],
+  maintenance: [],
+}
+
+export const EMPTY_INCIDENT_PAGE_DATA: IncidentPageData = {
+  product: {
+    name: 'Status',
+    description: 'Waiting for live status data.',
+    navigation: [],
   },
   services: [],
   incidents: [],
@@ -112,6 +139,12 @@ export async function fetchPublicSnapshot(
   return fetchJson<PublicSnapshotPayload>('/api/public/snapshot', fetcher)
 }
 
+export async function fetchPublicIncidentPage(
+  fetcher: typeof fetch | undefined = globalThis.fetch
+): Promise<IncidentPageData | null> {
+  return fetchJson<IncidentPageData>('/api/public/incidents', fetcher)
+}
+
 export async function fetchPublicSummary(
   fetcher: typeof fetch | undefined = globalThis.fetch
 ): Promise<PublicSummaryPayload | null> {
@@ -133,6 +166,16 @@ export async function getStatusSnapshot(fetcher?: typeof fetch): Promise<StatusS
   }
 
   return snapshot
+}
+
+export async function getIncidentPageData(fetcher?: typeof fetch): Promise<IncidentPageData> {
+  const pageData = await fetchPublicIncidentPage(fetcher)
+
+  if (!pageData) {
+    throw new Error('Incident history unavailable')
+  }
+
+  return pageData
 }
 
 export function getInitialStatusSnapshot(): StatusSnapshot {

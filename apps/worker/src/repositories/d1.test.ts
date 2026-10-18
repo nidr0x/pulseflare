@@ -158,6 +158,7 @@ describe('getPublicServiceHistory', () => {
     expect(history.get('api')).toEqual({
       uptimePercentage: 80,
       history: ['up', 'degraded'],
+      historyDays: ['2026-04-24', '2026-04-25'],
       locations: [
         { label: 'fra', uptimePercentage: 100, history: ['up', 'up'], latencyMs: 31 },
         { label: 'iad', uptimePercentage: 66.67, history: ['up', 'degraded'], latencyMs: 45 },

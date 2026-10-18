@@ -9,6 +9,7 @@ export type PublicServiceStatusRecord = {
 export type PublicServiceHistoryRecord = {
   uptimePercentage: number | null
   history: Array<'up' | 'degraded' | 'down' | 'unknown'>
+  historyDays: string[]
   locations: PublicServiceLocationRecord[]
 }
 
@@ -200,10 +201,13 @@ export async function getPublicServiceHistory(
   const result = (await database
     .prepare(
       `
-        SELECT service_id, day, location_label, up_count, down_count, last_latency_ms
+        SELECT daily_check_rollups.service_id, daily_check_rollups.day,
+               daily_check_rollups.location_label, daily_check_rollups.up_count,
+               daily_check_rollups.down_count, daily_check_rollups.last_latency_ms
         FROM daily_check_rollups
-        WHERE day >= ?
-        ORDER BY day DESC, location_label ASC
+        JOIN services ON services.id = daily_check_rollups.service_id
+        WHERE services.is_active = 1 AND daily_check_rollups.day >= ?
+        ORDER BY daily_check_rollups.day DESC, daily_check_rollups.location_label ASC
       `
     )
     .bind(cutoff)
@@ -249,6 +253,7 @@ export async function getPublicServiceHistory(
         serviceId,
         {
           ...aggregate,
+          historyDays: dayKeys,
           locations,
         },
       ] as const

@@ -1,11 +1,15 @@
-import { startTransition, useEffect, useState, type MouseEvent } from 'react'
+import { startTransition, useEffect, useRef, useState, type MouseEvent } from 'react'
 
 import { HomePage } from './routes/HomePage'
 import { IncidentsPage } from './routes/IncidentsPage'
 import {
-  getInitialStatusSnapshot,
+  EMPTY_INCIDENT_PAGE_DATA,
+  EMPTY_STATUS_SNAPSHOT,
+  getIncidentPageData,
   getStatusSnapshot,
+  type IncidentPageData,
   type SnapshotLoadState,
+  type StatusProduct,
   type StatusSnapshot,
 } from './lib/api'
 
@@ -19,12 +23,52 @@ function readPathname(): RoutePath {
   return typeof window === 'undefined' ? '/' : resolveRoutePath(window.location.pathname)
 }
 
+function isSafeNavigationHref(href: string): boolean {
+  const normalized = href.trim()
+  if (normalized.startsWith('//') || normalized.startsWith('\\\\')) return false
+
+  try {
+    const parsed = new URL(normalized)
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:'
+  } catch {
+    return !/^[a-z][a-z\d+.-]*:/i.test(normalized)
+  }
+}
+
+function isSafeAssetHref(href: string): boolean {
+  return isSafeNavigationHref(href)
+}
+
+function updateDocumentMetadata(product: StatusProduct, pathname: RoutePath): void {
+  const pageLabel = pathname === '/incidents' ? 'Incidents' : 'Status'
+  document.title = `${pageLabel} · ${product.name}`
+
+  let description = document.querySelector<HTMLMetaElement>('meta[name="description"]')
+  if (!description) {
+    description = document.createElement('meta')
+    description.name = 'description'
+    document.head.append(description)
+  }
+  description.content = product.description
+
+  let iconLink = document.querySelector<HTMLLinkElement>('link[rel~="icon"]')
+  if (!iconLink) {
+    iconLink = document.createElement('link')
+    iconLink.rel = 'icon'
+    document.head.append(iconLink)
+  }
+  iconLink.href = product.icon && isSafeAssetHref(product.icon) ? product.icon : '/brand/icon.svg'
+}
+
 export default function App() {
   const [pathname, setPathname] = useState<RoutePath>(readPathname)
-  const [snapshot, setSnapshot] = useState<StatusSnapshot>(() => getInitialStatusSnapshot())
+  const [snapshot, setSnapshot] = useState<StatusSnapshot>(() => EMPTY_STATUS_SNAPSHOT)
+  const [incidentPageData, setIncidentPageData] = useState<IncidentPageData>(() => EMPTY_INCIDENT_PAGE_DATA)
   const [snapshotLoadState, setSnapshotLoadState] = useState<SnapshotLoadState>('idle')
-  const [clockNow, setClockNow] = useState(() => Date.now())
   const [retryToken, setRetryToken] = useState(0)
+  const mainRef = useRef<HTMLElement>(null)
+  const previousPathname = useRef(pathname)
+  const product = pathname === '/incidents' ? incidentPageData.product : snapshot.product
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -55,11 +99,11 @@ export default function App() {
 
       timerId = window.setTimeout(() => {
         timerId = undefined
-        void updateSnapshot()
+        void updatePageData()
       }, delay)
     }
 
-    const updateSnapshot = async () => {
+    const updatePageData = async () => {
       if (inFlight) {
         return
       }
@@ -72,22 +116,24 @@ export default function App() {
       let nextDelay = 60_000
 
       try {
-        const nextSnapshot = await getStatusSnapshot()
-
-        if (ignore) {
-          return
+        if (pathname === '/incidents') {
+          const nextData = await getIncidentPageData()
+          if (ignore) return
+          startTransition(() => {
+            setIncidentPageData(nextData)
+            setSnapshotLoadState('ready')
+          })
+        } else {
+          const nextSnapshot = await getStatusSnapshot()
+          if (ignore) return
+          startTransition(() => {
+            setSnapshot(nextSnapshot)
+            setSnapshotLoadState('ready')
+          })
         }
-
-        startTransition(() => {
-          setSnapshot(nextSnapshot)
-          setSnapshotLoadState('ready')
-        })
         retryDelay = 10_000
       } catch {
-        if (ignore) {
-          return
-        }
-
+        if (ignore) return
         startTransition(() => {
           setSnapshotLoadState('error')
         })
@@ -111,11 +157,11 @@ export default function App() {
         return
       }
 
-      void updateSnapshot()
+      void updatePageData()
     }
 
     if (document.visibilityState === 'visible') {
-      void updateSnapshot()
+      void updatePageData()
     }
     window.addEventListener('popstate', handleNavigation)
     document.addEventListener('visibilitychange', handleVisibilityChange)
@@ -128,15 +174,19 @@ export default function App() {
       window.removeEventListener('popstate', handleNavigation)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [retryToken])
+  }, [pathname, retryToken])
 
   useEffect(() => {
-    const intervalId = window.setInterval(() => setClockNow(Date.now()), 30_000)
+    updateDocumentMetadata(product, pathname)
 
-    return () => window.clearInterval(intervalId)
-  }, [])
+    if (previousPathname.current !== pathname) {
+      window.scrollTo(0, 0)
+      mainRef.current?.focus({ preventScroll: true })
+      previousPathname.current = pathname
+    }
+  }, [pathname, product])
 
-  const retrySnapshot = () => setRetryToken((value) => value + 1)
+  const retryPageData = () => setRetryToken((value) => value + 1)
 
   const navigate = (nextPath: RoutePath) => (event: MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault()
@@ -151,6 +201,9 @@ export default function App() {
     })
   }
 
+  const logo = product.logo && isSafeAssetHref(product.logo) ? product.logo : undefined
+  const configuredLinks = (product.navigation ?? []).filter((item) => isSafeNavigationHref(item.href))
+
   return (
     <div className="app-shell">
       <div className="app-shell__glow app-shell__glow--left" />
@@ -158,9 +211,9 @@ export default function App() {
 
       <header className="topbar">
         <a className="brand" href="/" onClick={navigate('/')}>
-          <span className="brand__mark" aria-hidden="true" />
+          {logo ? <img className="brand__logo" src={logo} alt="" /> : <span className="brand__mark" aria-hidden="true" />}
           <span>
-            <strong>{snapshot.product.name}</strong>
+            <strong>{product.name}</strong>
             <small>Service status</small>
           </span>
         </a>
@@ -182,6 +235,11 @@ export default function App() {
           >
             Incidents
           </a>
+          {configuredLinks.map((item) => (
+            <a className="nav-link" href={item.href} key={`${item.label}-${item.href}`}>
+              {item.label}
+            </a>
+          ))}
         </nav>
       </header>
 
@@ -189,18 +247,20 @@ export default function App() {
         aria-busy={snapshotLoadState === 'loading'}
         className="app-main"
         data-sync-state={snapshotLoadState}
+        id="main-content"
+        ref={mainRef}
+        tabIndex={-1}
       >
-        {snapshotLoadState === 'error' ? (
+        {snapshotLoadState === 'error' && pathname === '/' ? (
           <p className="sync-notice" role="status">
             Live status data is unavailable. Retrying automatically.
           </p>
         ) : null}
         {pathname === '/incidents' ? (
-          <IncidentsPage snapshot={snapshot} />
+          <IncidentsPage data={incidentPageData} loadState={snapshotLoadState} onRetry={retryPageData} />
         ) : (
           <HomePage
-            now={clockNow}
-            onRetry={retrySnapshot}
+            onRetry={retryPageData}
             snapshot={snapshot}
             loadState={snapshotLoadState}
           />

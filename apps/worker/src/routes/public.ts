@@ -14,6 +14,13 @@ type ServiceState = 'operational' | 'outage' | 'unknown'
 type WindowState = 'up' | 'degraded' | 'down' | 'unknown'
 type PublicMaintenanceStatus = 'scheduled' | 'in_progress' | 'completed'
 type PublicSummaryStatus = 'operational' | 'degraded' | 'unknown'
+type PublicProductPayload = {
+  name: string
+  description: string
+  logo?: string
+  icon?: string
+  navigation: Array<{ label: string; href: string }>
+}
 
 const HISTORY_WINDOW_DAYS = 90
 const MAINTENANCE_RESPONSE_LIMIT = 10
@@ -26,6 +33,29 @@ function publicJson(data: unknown): Response {
       'cache-control': 'public, max-age=30, stale-while-revalidate=60',
     },
   })
+}
+
+function isSafePublicReference(value: string): boolean {
+  const normalized = value.trim()
+  if (normalized.startsWith('//') || normalized.startsWith('\\\\')) return false
+
+  try {
+    const parsed = new URL(normalized)
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:'
+  } catch {
+    return !/^[a-z][a-z\d+.-]*:/i.test(normalized)
+  }
+}
+
+function buildPublicProduct(config: StatusConfig): PublicProductPayload {
+  const brand = config.site.brand
+  return {
+    name: config.site.name,
+    description: config.site.description ?? 'System health and incident reporting',
+    ...(brand?.logo && isSafePublicReference(brand.logo) ? { logo: brand.logo } : {}),
+    ...(brand?.icon && isSafePublicReference(brand.icon) ? { icon: brand.icon } : {}),
+    navigation: (config.site.navigation ?? []).filter((item) => isSafePublicReference(item.href)),
+  }
 }
 
 function getLatestCheckedAt(records: PublicServiceStatusRecord[]): string | null {
@@ -133,6 +163,16 @@ function getMedianLatency(locations: PublicServiceHistoryRecord['locations']): n
     : Math.round((values[middle - 1] + values[middle]) / 2)
 }
 
+function getHistoryDays(now: Date, days: number): string[] {
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  start.setUTCDate(start.getUTCDate() - days + 1)
+  return Array.from({ length: days }, (_, index) => {
+    const day = new Date(start)
+    day.setUTCDate(start.getUTCDate() + index)
+    return day.toISOString().slice(0, 10)
+  })
+}
+
 function buildServicePayload(
   service: StatusService,
   statusRecord: PublicServiceStatusRecord | undefined,
@@ -151,6 +191,7 @@ function buildServicePayload(
     uptimePercentage: historyRecord?.uptimePercentage ?? null,
     latencyMs: getMedianLatency(historyRecord?.locations ?? []),
     history: historyRecord?.history ?? Array.from({ length: HISTORY_WINDOW_DAYS }, () => 'unknown' as const),
+    historyDays: historyRecord?.historyDays ?? getHistoryDays(now, HISTORY_WINDOW_DAYS),
     locations: historyRecord?.locations ?? [],
     notes: getServiceNotes(service, status, statusRecord?.checkedAt, stale),
   }
@@ -224,14 +265,20 @@ function buildIncidentPayload(incidents: Awaited<ReturnType<typeof listPublicInc
   })
 }
 
-export async function handlePublicIncidents(env: unknown): Promise<Response> {
+export async function handlePublicIncidents(env: unknown, now = new Date()): Promise<Response> {
+  const config = getConfig(env)
   const database = getWorkerDatabase(env)
+  const [incidents, maintenance] = await Promise.all([
+    database ? listPublicIncidents(database) : Promise.resolve([]),
+    Promise.resolve(buildMaintenancePayload(config, now)),
+  ])
 
-  if (!database) {
-    return publicJson({ incidents: [] })
-  }
-
-  return publicJson({ incidents: buildIncidentPayload(await listPublicIncidents(database)) })
+  return publicJson({
+    product: buildPublicProduct(config),
+    services: config.services.map(({ id, name }) => ({ id, name })),
+    incidents: buildIncidentPayload(incidents),
+    maintenance,
+  })
 }
 
 function getPublicMaintenanceStatus(
@@ -304,10 +351,7 @@ export async function handlePublicSnapshot(env: unknown, now = new Date()): Prom
   const staleAfterMinutes = config.staleAfterMinutes ?? DEFAULT_STALE_AFTER_MINUTES
 
   return publicJson({
-    product: {
-      name: config.site.name,
-      description: config.site.description ?? 'System health and incident reporting',
-    },
+    product: buildPublicProduct(config),
     summary: buildSummaryPayload(config, statuses, now),
     services: config.services.map((service) =>
       buildServicePayload(service, statuses.get(service.id), history.get(service.id), now, staleAfterMinutes)

@@ -14,6 +14,8 @@ type TcpConnector = (address: { hostname: string; port: number }) => {
 }
 
 const MAX_RESPONSE_BODY_BYTES = 64 * 1024
+const DEFAULT_HTTP_CHECK_TIMEOUT_MS = 5_000
+const DEFAULT_TCP_CHECK_TIMEOUT_MS = 3_000
 const DEFAULT_REMOTE_PROBE_TIMEOUT_MS = 15_000
 const MAX_REMOTE_LATENCY_MS = 10 * 60_000
 
@@ -87,17 +89,19 @@ async function runTcpCheck(
   const address = parseTcpTarget(target)
   const startedAt = Date.now()
   const socket = tcpConnect(address)
+  const effectiveTimeoutMs = timeoutMs ?? DEFAULT_TCP_CHECK_TIMEOUT_MS
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
 
   try {
-    const opened = socket.opened
-    const openedInfo = await (typeof timeoutMs === 'number'
-      ? Promise.race([
-          opened,
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`TCP connect timed out after ${timeoutMs} ms`)), timeoutMs)
-          ),
-        ])
-      : opened)
+    await Promise.race([
+      socket.opened,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error(`TCP connect timed out after ${effectiveTimeoutMs} ms`)),
+          effectiveTimeoutMs
+        )
+      }),
+    ])
 
     await socket.close()
 
@@ -107,12 +111,14 @@ async function runTcpCheck(
       latencyMs: Date.now() - startedAt,
     }
   } catch (error) {
-    await socket.close().catch(() => undefined)
+    void socket.close().catch(() => undefined)
 
     return {
       status: 'down',
       reason: error instanceof Error ? error.message : `TCP connection failed for ${target}`,
     }
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId)
   }
 }
 
@@ -313,7 +319,7 @@ export async function runConfiguredCheck(
       method,
       headers: check.headers,
       body: check.body,
-      signal: typeof check.timeoutMs === 'number' ? AbortSignal.timeout(check.timeoutMs) : undefined,
+      signal: AbortSignal.timeout(check.timeoutMs ?? DEFAULT_HTTP_CHECK_TIMEOUT_MS),
     })
     const latencyMs = Date.now() - startedAt
 
