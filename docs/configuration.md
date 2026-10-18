@@ -66,6 +66,11 @@ The supported provider shape is:
 - optional `secretName`, `secretHeader`, and `secretPrefix` for a Worker secret binding
 - optional `bodyTemplate`
 
+Webhook requests have a 10-second timeout. The outbox runs at most four
+deliveries at once. It preserves creation order for each provider, incident,
+and service combination; deliveries for unrelated incidents or services can
+run concurrently.
+
 At the top level, `staleAfterMinutes` sets how long the public page treats the
 latest check as current. `retentionDays` sets how long historical D1 data stays;
 the scheduler prunes expired records at most once per day. Public history uses
@@ -122,6 +127,8 @@ HTTP fields:
 - optional `expect.bodyExcludes`
 - optional `probe`
 
+HTTP checks without `timeoutMs` use a 5-second timeout.
+
 ### TCP check
 
 ```ts
@@ -141,6 +148,8 @@ TCP fields:
 - `target`
 - optional `timeoutMs`
 - optional `probe`
+
+TCP checks without `timeoutMs` use a 3-second connection timeout.
 
 ## Probe model
 
@@ -263,12 +272,16 @@ The Worker currently:
 - reads `config/pulse.config.ts` for the protected bootstrap install flow
 - bootstrap and scheduled runs sync `services` from config into D1
 - scheduled runs execute HTTP and TCP checks from config and persist status/latency results
+- configured checks run with a maximum of four checks in flight; results are folded back into config order
 - scheduled runs dispatch webhook notifications on incident open and resolve transitions
+- webhook delivery has a 10-second timeout and a maximum of four deliveries in flight, preserving order for each provider, incident, and service
 - notification grace periods delay incident opening and webhook delivery until sustained failure is confirmed
 - active maintenance windows suppress incident-open notifications for affected services
 - the Worker exposes public summary, services, incidents, and maintenance routes
-- the web app reads one canonical `/api/public/snapshot` response and uses an empty unknown state when it is unavailable
+- the status page reads `/api/public/snapshot` and uses an empty unknown state when it is unavailable
+- the incidents page reads a compact `/api/public/incidents` response without service history rollups
 - scheduled checks persist every result and calculate real 90-day history from D1
+- public 90-day history reads only rollups for active services
 - incidents require configurable consecutive failures and recoveries
 - webhook notifications are queued in D1 and retried asynchronously
 

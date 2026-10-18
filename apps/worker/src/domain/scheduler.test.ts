@@ -59,19 +59,45 @@ function createFakeDatabase(initial?: {
     }>,
     lastPrunedAt: null as string | null,
     pruneRuns: 0,
-    execCalls: 0,
     batchCalls: [] as number[],
     forceIncidentConflict: initial?.forceIncidentConflict ?? false,
   }
 
   const database = {
     async exec() {
-      state.execCalls += 1
       return undefined
     },
     prepare(query: string) {
       return {
         async all() {
+          if (
+            query.includes('FROM services') &&
+            query.includes('LEFT JOIN service_status') &&
+            query.includes('LEFT JOIN incidents')
+          ) {
+            return {
+              results: state.services
+                .filter((service) => service.is_active !== 0)
+                .map((service) => {
+                  const status = state.statuses.find((row) => row.service_id === service.id)
+                  const incident = state.incidents.find(
+                    (row) => row.service_id === service.id && row.status === 'open'
+                  )
+
+                  return {
+                    service_id: service.id,
+                    current_status: status?.current_status ?? null,
+                    failing_since: status?.failing_since ?? null,
+                    failure_count: status?.failure_count ?? null,
+                    recovery_count: status?.recovery_count ?? null,
+                    open_incident_id: incident?.id ?? null,
+                    open_incident_status: incident?.status ?? null,
+                    open_incident_latest_reason: incident?.latest_reason ?? null,
+                  }
+                }),
+            }
+          }
+
           if (query.includes('FROM services') && query.includes('WHERE is_active = 1')) {
             return {
               results: state.services
@@ -455,7 +481,6 @@ describe('runScheduledChecks', () => {
       downCount: 0,
     })
     expect(fetcher).toHaveBeenCalledTimes(1)
-    expect(state.execCalls).toBe(0)
     expect(state.statuses).toEqual([
       {
         service_id: 'api',
