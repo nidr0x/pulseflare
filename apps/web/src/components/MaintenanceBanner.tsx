@@ -1,7 +1,8 @@
-import type { MaintenanceRecord } from '../lib/api'
+import type { MaintenanceRecord, PublicServiceOption } from '../lib/api'
 
 type MaintenanceBannerProps = {
   maintenance: MaintenanceRecord[]
+  services?: PublicServiceOption[]
 }
 
 function formatTimestamp(value: string): string {
@@ -14,7 +15,7 @@ function formatTimestamp(value: string): string {
   }).format(new Date(value))
 }
 
-export function MaintenanceBanner({ maintenance }: MaintenanceBannerProps) {
+export function MaintenanceBanner({ maintenance, services = [] }: MaintenanceBannerProps) {
   const entries = maintenance
     .filter((entry) => entry.status === 'scheduled' || entry.status === 'in_progress')
     .sort((left, right) => Date.parse(left.start) - Date.parse(right.start))
@@ -28,25 +29,35 @@ export function MaintenanceBanner({ maintenance }: MaintenanceBannerProps) {
       <div className="section-heading">
         <div>
           <p className="eyebrow">Maintenance</p>
-          <h2>Upcoming maintenance</h2>
+          <h2>Current and upcoming maintenance</h2>
         </div>
         <p>Scheduled work stays visible on the status page without mixing it into the uptime rows.</p>
       </div>
 
       <div className="maintenance-banner__list">
-        {entries.map((entry) => (
-          <article className="maintenance-banner__entry" key={entry.id}>
-            <div className="maintenance-banner__header">
-              <h3>{entry.title}</h3>
-              <span className={`timeline-tag timeline-tag--${entry.status}`}>{entry.status}</span>
-            </div>
-            <p className="maintenance-banner__time">
-              {entry.status === 'in_progress' ? 'In progress since ' : 'Starts '}
-              {formatTimestamp(entry.start)}
-            </p>
-            <p>{entry.body}</p>
-          </article>
-        ))}
+        {(() => {
+          const serviceNames = new Map(services.map((service) => [service.id, service.name]))
+
+          return entries.map((entry) => (
+            <article className="maintenance-banner__entry" key={entry.id}>
+              <div className="maintenance-banner__header">
+                <h3>{entry.title}</h3>
+                <span className={`timeline-tag timeline-tag--${entry.status}`}>{entry.status}</span>
+              </div>
+              <p className="maintenance-banner__time">
+                {entry.status === 'in_progress' ? 'In progress since ' : 'Starts '}
+                {formatTimestamp(entry.start)}
+              </p>
+              <p>{entry.body}</p>
+              <p className="maintenance-banner__services">
+                <strong>Affected services:</strong>{' '}
+                {entry.services.length === 0
+                  ? 'All services'
+                  : entry.services.map((serviceId) => serviceNames.get(serviceId) ?? serviceId).join(', ')}
+              </p>
+            </article>
+          ))
+        })()}
       </div>
     </section>
   )

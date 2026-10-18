@@ -57,8 +57,15 @@ body {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: var(--color-ok);
-  box-shadow: 0 0 0 6px rgba(36, 194, 106, 0.14);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.12);
+}
+
+.brand__logo {
+  display: block;
+  width: 38px;
+  height: 38px;
+  object-fit: contain;
 }
 
 .topbar__nav {
@@ -78,7 +85,12 @@ body {
 .nav-link--active {
   color: #ffffff;
   background: rgba(255, 255, 255, 0.08);
-  outline: none;
+}
+
+.nav-link:focus-visible,
+.brand:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 3px;
 }
 
 .app-main {
@@ -189,6 +201,10 @@ h4 {
   background: rgba(245, 158, 11, 0.12);
 }
 
+.hero-status__signal--unknown {
+  background: rgba(102, 112, 133, 0.12);
+}
+
 .hero-status__signal-dot {
   width: 48px;
   height: 48px;
@@ -198,6 +214,10 @@ h4 {
 
 .hero-status__signal--degraded .hero-status__signal-dot {
   background: var(--color-warn);
+}
+
+.hero-status__signal--unknown .hero-status__signal-dot {
+  background: #98a2b3;
 }
 
 .hero-status__copy,
@@ -226,7 +246,11 @@ h4 {
 .status-retry:focus-visible {
   border-color: var(--color-accent-strong);
   background: var(--color-accent-strong);
-  outline: none;
+}
+
+.status-retry:focus-visible {
+  outline: 3px solid #18212f;
+  outline-offset: 2px;
 }
 
 .service-locations {
@@ -299,7 +323,7 @@ h4 {
 .service-badge--operational,
 .timeline-tag--resolved,
 .timeline-tag--completed {
-  color: var(--color-ok);
+  color: var(--color-ok-text);
 }
 
 .service-badge--degraded,
@@ -308,12 +332,12 @@ h4 {
 .timeline-tag--open,
 .timeline-tag--in_progress,
 .timeline-entry__marker--minor {
-  color: var(--color-warn);
+  color: var(--color-warn-text);
 }
 
 .service-badge--outage,
 .timeline-entry__marker--major {
-  color: var(--color-danger);
+  color: var(--color-danger-text);
 }
 
 .service-badge--unknown {
@@ -383,8 +407,50 @@ h4 {
 
 .uptime-strip {
   display: grid;
-  grid-template-columns: repeat(90, minmax(0, 1fr));
-  gap: 3px;
+  grid-template-columns: repeat(90, minmax(6px, 1fr));
+  gap: 2px;
+  min-width: 700px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.uptime-chart {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+}
+
+.uptime-chart__summary,
+.uptime-chart__axis {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--color-muted);
+  font-size: 0.82rem;
+}
+
+.uptime-chart__summary {
+  flex-wrap: wrap;
+}
+
+.uptime-chart__scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 2px 1px 8px;
+  scrollbar-color: #98a2b3 transparent;
+  scrollbar-width: thin;
+}
+
+.uptime-chart__scroll:focus-visible {
+  outline: 3px solid var(--color-accent-strong);
+  outline-offset: 2px;
+}
+
+.uptime-strip__item {
+  min-width: 0;
+  list-style: none;
 }
 
 .uptime-strip__bar {
@@ -410,6 +476,46 @@ h4 {
   background: #cbd5e1;
 }
 
+.uptime-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.82rem;
+}
+
+.uptime-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.uptime-legend__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: #cbd5e1;
+}
+
+.uptime-legend__swatch--up { background: var(--color-ok); }
+.uptime-legend__swatch--degraded { background: var(--color-warn); }
+.uptime-legend__swatch--down { background: var(--color-danger); }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .timeline-entry {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -426,6 +532,27 @@ h4 {
 .timeline-entry__content {
   display: grid;
   gap: 10px;
+}
+
+.timeline-entry__services,
+.maintenance-banner__services {
+  color: var(--color-muted);
+  font-size: 0.9rem;
+}
+
+.timeline-entry__services strong,
+.maintenance-banner__services strong {
+  color: var(--color-ink);
+}
+
+.timeline-empty {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  padding: 18px;
+  border: 1px dashed var(--color-line);
+  border-radius: 14px;
+  color: var(--color-muted);
 }
 
 .maintenance-banner__entry {
@@ -451,8 +578,12 @@ h4 {
 .filter-chip:focus-visible {
   color: white;
   border-color: transparent;
-  background: linear-gradient(135deg, var(--color-accent), var(--color-accent-strong));
-  outline: none;
+  background: var(--color-filter-active);
+}
+
+.filter-chip:focus-visible {
+  outline: 3px solid #18212f;
+  outline-offset: 2px;
 }
 
 @media (max-width: 900px) {
@@ -486,7 +617,7 @@ h4 {
   }
 
   .uptime-strip {
-    gap: 2px;
+    min-width: 700px;
   }
 
   .uptime-strip__bar {

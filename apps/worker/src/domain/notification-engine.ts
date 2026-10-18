@@ -33,6 +33,8 @@ type NotificationOutboxRow = {
 const MAX_NOTIFICATION_ATTEMPTS = 5
 const NOTIFICATION_BATCH_SIZE = 20
 const NOTIFICATION_CLAIM_MS = 2 * 60_000
+const NOTIFICATION_CONCURRENCY = 4
+const DEFAULT_WEBHOOK_TIMEOUT_MS = 10_000
 
 export function buildNotificationDispatches(
   mutation: IncidentMutation,
@@ -118,7 +120,11 @@ export async function dispatchNotification(
       }
     }
 
-    await fetcher(url.toString(), { method: 'GET', headers })
+    await fetcher(url.toString(), {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(DEFAULT_WEBHOOK_TIMEOUT_MS),
+    })
     return
   }
 
@@ -130,6 +136,7 @@ export async function dispatchNotification(
     method,
     headers,
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(DEFAULT_WEBHOOK_TIMEOUT_MS),
   })
 }
 
@@ -293,6 +300,7 @@ async function deliverNotification(
     method,
     headers,
     body: getWebhookBody(provider, payload),
+    signal: AbortSignal.timeout(DEFAULT_WEBHOOK_TIMEOUT_MS),
   })
 
   if (!response.ok) {
@@ -366,11 +374,22 @@ export async function dispatchPendingNotifications(
   const result = (await database
     .prepare(
       `
-        SELECT id, provider_id, event, incident_id, service_id, payload_json, attempts
-        FROM notification_outbox
-        WHERE status IN ('pending', 'retrying') AND next_attempt_at <= ?
-          AND (claimed_until IS NULL OR claimed_until <= ?)
-        ORDER BY created_at ASC
+        SELECT candidate.id, candidate.provider_id, candidate.event, candidate.incident_id,
+               candidate.service_id, candidate.payload_json, candidate.attempts
+        FROM notification_outbox AS candidate
+        WHERE candidate.status IN ('pending', 'retrying') AND candidate.next_attempt_at <= ?
+          AND (candidate.claimed_until IS NULL OR candidate.claimed_until <= ?)
+          AND NOT EXISTS (
+            SELECT 1
+            FROM notification_outbox AS earlier
+            WHERE earlier.provider_id = candidate.provider_id
+              AND earlier.incident_id IS candidate.incident_id
+              AND earlier.service_id = candidate.service_id
+              AND earlier.status IN ('pending', 'retrying')
+              AND (earlier.created_at < candidate.created_at
+                OR (earlier.created_at = candidate.created_at AND earlier.id < candidate.id))
+          )
+        ORDER BY candidate.created_at ASC, candidate.id ASC
         LIMIT ?
       `
     )
@@ -379,9 +398,11 @@ export async function dispatchPendingNotifications(
 
   const claimId = crypto.randomUUID()
 
-  for (const row of result.results ?? []) {
+  const rows = result.results ?? []
+
+  const processRow = async (row: NotificationOutboxRow): Promise<void> => {
     if (!(await claimNotification(database, row.id, claimId, now))) {
-      continue
+      return
     }
 
     const provider = getProvider(config.notifications.providers, row.provider_id)
@@ -407,7 +428,7 @@ export async function dispatchPendingNotifications(
         },
         logger
       )
-      continue
+      return
     }
 
     try {
@@ -451,4 +472,17 @@ export async function dispatchPendingNotifications(
       )
     }
   }
+
+  let nextIndex = 0
+  const consume = async (): Promise<void> => {
+    while (true) {
+      const index = nextIndex
+      nextIndex += 1
+      const row = rows[index]
+      if (!row) return
+      await processRow(row)
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(NOTIFICATION_CONCURRENCY, rows.length) }, () => consume()))
 }

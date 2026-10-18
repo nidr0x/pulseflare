@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+
 import {
   formatDuration,
   getSnapshotFreshness,
@@ -27,7 +29,19 @@ function formatCheckedAt(value: string | null): string {
   }).format(new Date(value))
 }
 
-export function HeroStatus({ product, summary, loadState = 'ready', now = Date.now(), onRetry }: HeroStatusProps) {
+export function HeroStatus({ product, summary, loadState = 'ready', now, onRetry }: HeroStatusProps) {
+  const [clockNow, setClockNow] = useState(() => now ?? Date.now())
+
+  useEffect(() => {
+    if (now !== undefined) {
+      setClockNow(now)
+      return
+    }
+
+    const intervalId = window.setInterval(() => setClockNow(Date.now()), 30_000)
+    return () => window.clearInterval(intervalId)
+  }, [now])
+
   const headline =
     loadState === 'error'
       ? 'Live status unavailable'
@@ -36,14 +50,14 @@ export function HeroStatus({ product, summary, loadState = 'ready', now = Date.n
       : summary.status === 'degraded'
         ? 'Some systems require attention'
         : 'Checking current status'
-  const signalStatus = summary.status === 'unknown' ? 'degraded' : summary.status
+  const signalStatus = loadState === 'error' ? 'unknown' : summary.status
   const healthySummary =
     loadState === 'error'
       ? 'Retrying automatically'
       : summary.totalCount > 0
         ? `${summary.upCount}/${summary.totalCount} services healthy`
         : 'No services reported yet'
-  const freshness = getSnapshotFreshness(summary.checkedAt, now, summary.staleAfterMinutes)
+  const freshness = getSnapshotFreshness(summary.checkedAt, clockNow, summary.staleAfterMinutes)
   const lastUpdated = summary.checkedAt
     ? `Last updated ${formatCheckedAt(summary.checkedAt)}`
     : 'Last updated: awaiting first successful check'

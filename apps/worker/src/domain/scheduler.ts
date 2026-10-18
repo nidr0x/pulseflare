@@ -26,6 +26,22 @@ type ServiceStatusRow = {
   recovery_count: number
 }
 
+type ServiceRuntimeStateRow = {
+  service_id: string
+  current_status: 'up' | 'down' | null
+  failing_since: string | null
+  failure_count: number | null
+  recovery_count: number | null
+  open_incident_id: string | null
+  open_incident_status: 'open' | null
+  open_incident_latest_reason: string | null
+}
+
+type ServiceRuntimeState = {
+  previousStatus: ServiceStatusRow | null
+  openIncident: OpenIncidentRow | null
+}
+
 type ServiceCheckSummary = {
   status: 'up' | 'down'
   reason: string
@@ -44,6 +60,7 @@ const DEFAULT_RECOVERY_THRESHOLD = 2
 const CHECK_CONCURRENCY = 4
 const DEFAULT_RETENTION_DAYS = 90
 const SCHEDULER_LEASE_MS = 2 * 60_000
+const LEASE_RENEW_INTERVAL_MS = 30_000
 
 async function findOpenIncident(database: D1Database, serviceId: string): Promise<OpenIncidentRow | null> {
   return (
@@ -61,18 +78,48 @@ async function findOpenIncident(database: D1Database, serviceId: string): Promis
   )
 }
 
-async function findServiceStatus(database: D1Database, serviceId: string): Promise<ServiceStatusRow | null> {
-  return (
-    (await database
-      .prepare(
-        `
-          SELECT current_status, failing_since, failure_count, recovery_count
-          FROM service_status
-          WHERE service_id = ?
-        `
-      )
-      .bind(serviceId)
-      .first<ServiceStatusRow>()) ?? null
+async function listServiceRuntimeStates(database: D1Database): Promise<Map<string, ServiceRuntimeState>> {
+  const result = (await database
+    .prepare(
+      `
+        SELECT services.id AS service_id,
+               service_status.current_status,
+               service_status.failing_since,
+               service_status.failure_count,
+               service_status.recovery_count,
+               incidents.id AS open_incident_id,
+               incidents.status AS open_incident_status,
+               incidents.latest_reason AS open_incident_latest_reason
+        FROM services
+        LEFT JOIN service_status ON service_status.service_id = services.id
+        LEFT JOIN incidents ON incidents.service_id = services.id AND incidents.status = 'open'
+        WHERE services.is_active = 1
+      `
+    )
+    .all<ServiceRuntimeStateRow>()) as { results?: ServiceRuntimeStateRow[] }
+
+  return new Map(
+    (result.results ?? []).map((row) => [
+      row.service_id,
+      {
+        previousStatus:
+          row.current_status === null
+            ? null
+            : {
+                current_status: row.current_status,
+                failing_since: row.failing_since,
+                failure_count: row.failure_count ?? 0,
+                recovery_count: row.recovery_count ?? 0,
+              },
+        openIncident: row.open_incident_id
+          ? {
+              id: row.open_incident_id,
+              status: row.open_incident_status ?? 'open',
+              latest_reason: row.open_incident_latest_reason,
+            }
+          : null,
+      },
+    ])
   )
 }
 
@@ -255,30 +302,18 @@ function summarizeServiceResults(
   }
 }
 
-async function runServiceChecks(
-  service: StatusService,
-  fetcher: Fetcher,
-  remoteProbeUrl?: string,
-  remoteProbeToken?: string
-): Promise<ServiceCheckSummary> {
-  const results: CheckRunResult[] = []
-
-  for (const check of service.checks) {
-    results.push(await runConfiguredCheck(check, fetcher, undefined, remoteProbeUrl, remoteProbeToken))
-  }
-
-  return summarizeServiceResults(results, service.failurePolicy)
-}
-
-async function runServiceChecksConcurrently(
+async function runConfiguredChecksConcurrently(
   services: StatusService[],
   fetcher: Fetcher,
   remoteProbeUrl?: string,
   remoteProbeToken?: string,
-  onServiceFinished?: () => Promise<void>,
+  onCheckFinished?: () => Promise<void>,
   logger: ObservabilityLogger = console
 ): Promise<Array<{ service: StatusService; result: ServiceCheckSummary }>> {
-  const results: Array<ServiceCheckSummary | undefined> = new Array(services.length)
+  const checkResults = services.map((service) => new Array<CheckRunResult>(service.checks.length))
+  const tasks = services.flatMap((service, serviceIndex) =>
+    service.checks.map((check, checkIndex) => ({ service, serviceIndex, check, checkIndex }))
+  )
   let nextIndex = 0
 
   async function consume(): Promise<void> {
@@ -286,20 +321,21 @@ async function runServiceChecksConcurrently(
       const index = nextIndex
       nextIndex += 1
 
-      if (index >= services.length) {
+      if (index >= tasks.length) {
         return
       }
 
+      const task = tasks[index]
       try {
-        const result = await runServiceChecks(services[index], fetcher, remoteProbeUrl, remoteProbeToken)
-        results[index] = result
+        const result = await runConfiguredCheck(task.check, fetcher, undefined, remoteProbeUrl, remoteProbeToken)
+        checkResults[task.serviceIndex][task.checkIndex] = result
 
         if (result.status === 'down') {
           emitObservabilityEvent(
             'warn',
             'probe.failed',
             {
-              serviceId: services[index].id,
+              serviceId: task.service.id,
               status: result.status,
               latencyMs: result.latencyMs,
               reason: getObservabilityError(result.reason),
@@ -308,21 +344,16 @@ async function runServiceChecksConcurrently(
           )
         }
       } catch (error) {
-        results[index] = {
+        const failedResult: CheckRunResult = {
           status: 'down',
           reason: error instanceof Error ? error.message : 'Check execution failed',
-          checks: [
-            {
-              status: 'down',
-              reason: error instanceof Error ? error.message : 'Check execution failed',
-            },
-          ],
         }
+        checkResults[task.serviceIndex][task.checkIndex] = failedResult
         emitObservabilityEvent(
           'error',
           'probe.failed',
           {
-            serviceId: services[index].id,
+            serviceId: task.service.id,
             status: 'down',
             error: getObservabilityError(error),
           },
@@ -330,23 +361,20 @@ async function runServiceChecksConcurrently(
         )
       }
 
-      if (onServiceFinished) {
-        await onServiceFinished()
+      if (onCheckFinished) {
+        await onCheckFinished()
       }
     }
   }
 
-  await Promise.all(
-    Array.from({ length: Math.min(CHECK_CONCURRENCY, services.length) }, () => consume())
-  )
+  const workerCount = Math.min(CHECK_CONCURRENCY, tasks.length)
+  const settledWorkers = await Promise.allSettled(Array.from({ length: workerCount }, () => consume()))
+  const workerFailure = settledWorkers.find((result) => result.status === 'rejected')
+  if (workerFailure?.status === 'rejected') throw workerFailure.reason
 
   return services.map((service, index) => ({
     service,
-    result: results[index] ?? {
-      status: 'down',
-      reason: 'Check execution failed',
-      checks: [{ status: 'down', reason: 'Check execution failed' }],
-    },
+    result: summarizeServiceResults(checkResults[index], service.failurePolicy),
   }))
 }
 
@@ -495,6 +523,54 @@ async function renewSchedulerLease(database: D1Database, now: string, ownerId: s
   return result?.meta?.changes === undefined || result.meta.changes > 0
 }
 
+function createSchedulerLeaseGuard(database: D1Database, ownerId: string) {
+  let lastRenewalAt = Date.now()
+  let renewalInFlight: Promise<void> | null = null
+  let leaseLost: Error | null = null
+
+  const renew = async (force = false): Promise<void> => {
+    if (leaseLost) throw leaseLost
+
+    if (renewalInFlight) {
+      await renewalInFlight
+      return
+    }
+
+    if (!force && Date.now() - lastRenewalAt < LEASE_RENEW_INTERVAL_MS) {
+      return
+    }
+
+    renewalInFlight = (async () => {
+      const renewed = await renewSchedulerLease(database, new Date().toISOString(), ownerId)
+      if (!renewed) {
+        leaseLost = new Error('Scheduler lease lost during run')
+        throw leaseLost
+      }
+      lastRenewalAt = Date.now()
+    })()
+
+    try {
+      await renewalInFlight
+    } finally {
+      renewalInFlight = null
+    }
+  }
+
+  const timerId = setInterval(() => {
+    void renew(true).catch(() => undefined)
+  }, LEASE_RENEW_INTERVAL_MS)
+
+  return {
+    ensure: renew,
+    async stop() {
+      clearInterval(timerId)
+      if (renewalInFlight) {
+        await renewalInFlight.catch(() => undefined)
+      }
+    },
+  }
+}
+
 async function releaseSchedulerLease(database: D1Database, now: string, ownerId: string): Promise<void> {
   await database
     .prepare('UPDATE scheduler_lease SET locked_until = ?, owner_id = NULL WHERE id = 1 AND owner_id = ?')
@@ -563,33 +639,31 @@ export async function runScheduledChecks(
     return { servicesChecked: 0, upCount: 0, downCount: 0 }
   }
 
+  const leaseGuard = createSchedulerLeaseGuard(database, runId)
   let runStarted = false
 
   try {
+    await leaseGuard.ensure()
     await startSchedulerRun(database, runId, checkedAt)
     runStarted = true
     await syncServices(database, config)
+    const runtimeStates = await listServiceRuntimeStates(database)
 
     let upCount = 0
     let downCount = 0
-    const serviceResults = await runServiceChecksConcurrently(
+    const serviceResults = await runConfiguredChecksConcurrently(
       config.services,
       fetcher,
       remoteProbeUrl,
       remoteProbeToken,
-      async () => {
-        if (!(await renewSchedulerLease(database, new Date().toISOString(), runId))) {
-          throw new Error('Scheduler lease lost during service checks')
-        }
-      },
+      () => leaseGuard.ensure(),
       logger
     )
 
     for (const { service, result } of serviceResults) {
-      if (!(await renewSchedulerLease(database, new Date().toISOString(), runId))) {
-        throw new Error('Scheduler lease lost while persisting service results')
-      }
-      const previousStatus = await findServiceStatus(database, service.id)
+      await leaseGuard.ensure()
+      const runtimeState = runtimeStates.get(service.id)
+      const previousStatus = runtimeState?.previousStatus ?? null
       const failureCount =
         result.status === 'down'
           ? (previousStatus?.current_status === 'down' ? previousStatus.failure_count : 0) + 1
@@ -606,7 +680,7 @@ export async function runScheduledChecks(
         downCount += 1
       }
 
-      const existingOpenIncident = await findOpenIncident(database, service.id)
+      const existingOpenIncident = runtimeState?.openIncident ?? null
       const thresholdedMutation = applyIncidentThreshold(
         deriveIncidentMutation({
           currentStatus: result.status,
@@ -768,9 +842,11 @@ export async function runScheduledChecks(
           .map((provider) => [provider.secretName as string, getWorkerSecret(env, provider.secretName as string)])
           .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
       )
+      await leaseGuard.ensure()
       await dispatchPendingNotifications(database, config, notificationFetcher, new Date(checkedAt), secrets, logger)
     }
 
+    await leaseGuard.ensure()
     await pruneHistoricalData(database, config.retentionDays ?? DEFAULT_RETENTION_DAYS, checkedAt)
 
     const summary = {
@@ -778,6 +854,7 @@ export async function runScheduledChecks(
       upCount,
       downCount,
     }
+    await leaseGuard.ensure()
     await finishSchedulerRun(database, runId, checkedAt, summary)
     emitObservabilityEvent('info', 'scheduler.run.completed', { runId, ...summary }, logger)
     return summary
@@ -793,6 +870,7 @@ export async function runScheduledChecks(
     }
     throw error
   } finally {
+    await leaseGuard.stop()
     await releaseSchedulerLease(database, new Date().toISOString(), runId)
   }
 }

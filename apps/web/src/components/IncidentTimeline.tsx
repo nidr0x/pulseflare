@@ -1,4 +1,4 @@
-import type { IncidentRecord, MaintenanceRecord } from '../lib/api'
+import type { IncidentRecord, MaintenanceRecord, PublicServiceOption, SnapshotLoadState } from '../lib/api'
 
 type IncidentTimelineProps = {
   incidents: IncidentRecord[]
@@ -7,6 +7,9 @@ type IncidentTimelineProps = {
   title?: string
   eyebrow?: string
   maxEntries?: number
+  services?: PublicServiceOption[]
+  loadState?: SnapshotLoadState
+  onRetry?: () => void
 }
 
 type TimelineEntry =
@@ -89,11 +92,15 @@ export function IncidentTimeline({
   title = 'Recent incidents',
   eyebrow = 'Incident log',
   maxEntries,
+  services = [],
+  loadState = 'ready',
+  onRetry,
 }: IncidentTimelineProps) {
   const visibleIncidents = filterEntriesByService(incidents, selectedService)
   const visibleMaintenance = filterEntriesByService(maintenance, selectedService)
   const entries = mergeTimelineEntries(visibleIncidents, visibleMaintenance)
   const visibleEntries = typeof maxEntries === 'number' ? entries.slice(0, maxEntries) : entries
+  const serviceNames = new Map(services.map((service) => [service.id, service.name]))
 
   return (
     <section className="panel">
@@ -125,10 +132,30 @@ export function IncidentTimeline({
                   {formatTimestamp(entry.resolvedAt)}
                 </p>
               ) : null}
+              <p className="timeline-entry__services">
+                <strong>Affected services:</strong>{' '}
+                {entry.services.length === 0
+                  ? 'All services'
+                  : entry.services.map((serviceId) => serviceNames.get(serviceId) ?? serviceId).join(', ')}
+              </p>
             </div>
           </article>
         ))}
       </div>
+      {visibleEntries.length === 0 ? (
+        <div className="timeline-empty" role={loadState === 'loading' || loadState === 'idle' ? 'status' : undefined}>
+          <p>
+            {loadState === 'loading' || loadState === 'idle'
+              ? 'Loading incidents and maintenance…'
+              : loadState === 'error'
+                ? 'Incident and maintenance history could not be loaded.'
+                : 'No incidents or maintenance match this filter.'}
+          </p>
+          {loadState === 'error' && onRetry ? (
+            <button className="status-retry" onClick={onRetry} type="button">Retry</button>
+          ) : null}
+        </div>
+      ) : null}
     </section>
   )
 }

@@ -13,9 +13,9 @@ type HomePageProps = {
 export function HomePage({ snapshot, loadState = 'ready', now, onRetry }: HomePageProps) {
   return (
     <div className="page-stack">
-      <MaintenanceBanner maintenance={snapshot.maintenance} />
+      <MaintenanceBanner maintenance={snapshot.maintenance} services={snapshot.services} />
       <HeroStatus loadState={loadState} now={now} onRetry={onRetry} product={snapshot.product} summary={snapshot.summary} />
-      <ServiceGroupList services={snapshot.services} />
+      <ServiceGroupList services={snapshot.services} loadState={loadState} />
     </div>
   )
 }
