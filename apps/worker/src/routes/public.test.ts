@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import defaultStatusConfig from '../../../../config/pulse.config.ts'
 import worker from '../index'
 
 beforeEach(() => {
@@ -79,6 +80,14 @@ describe('/api/public/snapshot', () => {
 
     const database = {
       prepare(query: string) {
+        if (query.includes('FROM snapshot_state')) {
+          return {
+            async first() {
+              return null
+            },
+          }
+        }
+
         if (query.includes('FROM daily_check_rollups')) {
           return {
             bind() {
@@ -482,6 +491,27 @@ describe('/api/health', () => {
     )
 
     expect(response.status).toBe(503)
+    expect(response.headers.get('cache-control')).toBe('no-store')
     await expect(response.json()).resolves.toMatchObject({ status: 'degraded' })
+  })
+})
+
+describe('config resolution', () => {
+  it('uses the checked-in config when STATUS_CONFIG is not provided', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/public/incidents'),
+      {} as never,
+      {} as ExecutionContext
+    )
+    const payload = (await response.json()) as {
+      product: { description: string }
+      services: Array<{ id: string; name: string }>
+    }
+
+    expect(response.status).toBe(200)
+    expect(payload.product.description).toBe(defaultStatusConfig.site.description)
+    expect(payload.services).toEqual(
+      defaultStatusConfig.services.map(({ id, name }) => ({ id, name }))
+    )
   })
 })

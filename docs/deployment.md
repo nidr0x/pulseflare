@@ -79,10 +79,20 @@ The first deployment will:
 - apply migrations from `apps/worker/migrations`
 - deploy the Worker from `apps/worker`
 - serve the web UI from `apps/web/dist` as Worker static assets
-- verify `/api/health` and `/api/public/snapshot` on the deployed Worker
+- verify `/api/health`, `/api/public/snapshot`, and `/api/public/incidents` on the deployed Worker
+
+Public API responses are served through the Worker edge cache for up to
+30 seconds. `wrangler deploy` does not purge the Worker cache, so for up to
+half a minute after a deploy some visitors may receive the previous
+deployment's cached responses. The smoke check compares `snapshot` and
+`incidents` service lists, so a genuinely inconsistent deployment still fails;
+briefly stale-but-valid responses are accepted. Cache deletes are
+same-datacenter only, so other regions also rely on this short TTL window.
 
 If `PULSEFLARE_BOOTSTRAP_TOKEN` is set, the workflow stores it as a Worker
-secret after deployment. Use a `POST` request with an authorization header to
+secret after deployment. A successful bootstrap request purges the cached
+public routes, so the first visitors after setup do not see the empty
+pre-install snapshot. Use a `POST` request with an authorization header to
 bootstrap:
 
 ```bash

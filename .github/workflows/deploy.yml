@@ -7,6 +7,12 @@ on:
       - main
   workflow_dispatch:
 
+# Deploys mutate shared Cloudflare resources (Worker, D1, secrets); run them
+# sequentially per ref instead of letting overlapping pushes interleave.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   verify:
     runs-on: ubuntu-latest

@@ -17,4 +17,20 @@ describe('security response headers', () => {
     expect(response.headers.get('x-content-type-options')).toBe('nosniff')
     await expect(response.text()).resolves.toBe('ok')
   })
+
+  it('allows https images so externally hosted brand logos load', async () => {
+    const response = withSecurityHeaders(new Response('ok'))
+
+    expect(response.headers.get('content-security-policy')).toContain("img-src 'self' data: https:")
+  })
+
+  it('restricts powerful browser features and cross-origin window access', async () => {
+    const response = withSecurityHeaders(new Response('ok'))
+    const policy = response.headers.get('permissions-policy') ?? ''
+
+    expect(policy).toContain('camera=()')
+    expect(policy).toContain('microphone=()')
+    expect(policy).toContain('geolocation=()')
+    expect(response.headers.get('cross-origin-opener-policy')).toBe('same-origin')
+  })
 })

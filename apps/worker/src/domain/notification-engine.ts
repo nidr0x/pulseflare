@@ -158,10 +158,10 @@ export function prepareNotificationDispatches(
   }
 
   const status = input.mutation.action === 'open' ? 'open' : 'resolved'
-  const gracePeriodMinutes = config.notifications.gracePeriodMinutes ?? 0
-  const nextAttemptAt = new Date(
-    Date.parse(input.occurredAt) + (status === 'open' ? gracePeriodMinutes * 60_000 : 0)
-  ).toISOString()
+  // The notification grace period is enforced upstream when the scheduler gates
+  // incident opening; once an incident is open, the dispatch is immediately due
+  // so a short outage that is publicly visible is never silently unnotified.
+  const nextAttemptAt = new Date(Date.parse(input.occurredAt)).toISOString()
   const payload: NotificationPayload = {
     event: dispatches[0].event,
     incidentId: input.incidentId,

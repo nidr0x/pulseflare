@@ -96,6 +96,29 @@ function assertSnapshotPayload(payload) {
   }
 }
 
+function assertIncidentsPayload(payload) {
+  if (
+    !isRecord(payload) ||
+    !isRecord(payload.product) ||
+    typeof payload.product.name !== 'string' ||
+    !Array.isArray(payload.services) ||
+    !Array.isArray(payload.incidents) ||
+    !Array.isArray(payload.maintenance)
+  ) {
+    throw new Error('Incidents view returned an invalid payload')
+  }
+
+  for (const service of payload.services) {
+    if (!isRecord(service) || typeof service.id !== 'string' || typeof service.name !== 'string') {
+      throw new Error('Incidents view returned an invalid payload')
+    }
+  }
+}
+
+function serviceIds(payload) {
+  return payload.services.map((service) => service.id).sort()
+}
+
 export async function runSmokeChecks({
   baseUrl,
   fetcher = globalThis.fetch,
@@ -113,6 +136,7 @@ export async function runSmokeChecks({
 
   const healthUrl = buildEndpointUrl(baseUrl, '/api/health')
   const snapshotUrl = buildEndpointUrl(baseUrl, '/api/public/snapshot')
+  const incidentsUrl = buildEndpointUrl(baseUrl, '/api/public/incidents')
   let lastError
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -141,7 +165,31 @@ export async function runSmokeChecks({
   const snapshot = await fetchJson(snapshotUrl, fetcher)
   assertSnapshotPayload(snapshot)
 
-  return { healthUrl, snapshotUrl }
+  const incidents = await fetchJson(incidentsUrl, fetcher)
+  assertIncidentsPayload(incidents)
+
+  // Both views derive their service list from the deployed config, but they
+  // are served by different routes (and can come from different cache
+  // generations right after a deploy). Divergent service lists mean the
+  // deployment is inconsistent.
+  const snapshotServiceIds = serviceIds(snapshot)
+  const incidentsServiceIds = serviceIds(incidents)
+
+  if (snapshotServiceIds.length !== incidentsServiceIds.length) {
+    throw new Error(
+      `Snapshot and incidents views list different services (${snapshotServiceIds.length} vs ${incidentsServiceIds.length})`
+    )
+  }
+
+  for (let index = 0; index < snapshotServiceIds.length; index += 1) {
+    if (snapshotServiceIds[index] !== incidentsServiceIds[index]) {
+      throw new Error(
+        `Snapshot and incidents views list different services (${snapshotServiceIds[index]} vs ${incidentsServiceIds[index]})`
+      )
+    }
+  }
+
+  return { healthUrl, snapshotUrl, incidentsUrl }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -5,11 +5,11 @@
   "scripts": {
     "dev": "wrangler dev --config wrangler.toml",
     "build": "tsc --build tsconfig.json --force --pretty false",
-    "test": "vitest run src/index.test.ts src/routes/public.test.ts src/routes/bootstrap.test.ts src/repositories/d1.test.ts src/domain/check-runner.test.ts src/domain/scheduler.test.ts src/domain/notification-engine.test.ts src/install.test.ts src/observability.test.ts src/security.test.ts",
+    "test": "vitest run src/index.test.ts src/routes/public.test.ts src/routes/bootstrap.test.ts src/repositories/d1.test.ts src/domain/check-runner.test.ts src/domain/scheduler.test.ts src/domain/scheduler.grace.integration.test.ts src/domain/scheduler.lifecycle.integration.test.ts src/domain/scheduler.snapshot.integration.test.ts src/domain/notification-engine.test.ts src/install.test.ts src/observability.test.ts src/security.test.ts",
     "lint": "tsc --build tsconfig.json --force --pretty false"
   },
   "dependencies": {
-    "@pulseflare/core": "file:../../packages/core",
+    "@pulseflare/schema": "file:../../packages/schema",
     "@pulseflare/schema": "file:../../packages/schema"
   },
   "devDependencies": {
