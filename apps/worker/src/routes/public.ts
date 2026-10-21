@@ -266,8 +266,11 @@ async function buildServicesPayload(env: unknown, now: Date) {
  */
 function resolveMaterializedServices(
   materializedServices: unknown[],
-  config: StatusConfig
-): unknown[] | null {
+  config: StatusConfig,
+  statuses: Map<string, PublicServiceStatusRecord>,
+  snapshotUpdatedAt: string,
+  now: Date
+): { services: unknown[]; statuses: Map<string, PublicServiceStatusRecord> } | null {
   const byId = new Map<string, Record<string, unknown>>()
 
   for (const entry of materializedServices) {
@@ -284,7 +287,40 @@ function resolveMaterializedServices(
     return null
   }
 
-  return config.services.map((service) => byId.get(service.id) as unknown)
+  const staleAfterMinutes = config.staleAfterMinutes ?? DEFAULT_STALE_AFTER_MINUTES
+  const resolvedStatuses = new Map(statuses)
+  const services = config.services.map((service) => {
+    const materialized = byId.get(service.id) as Record<string, unknown>
+    const currentStatus = statuses.get(service.id)
+    const statusRecord = currentStatus?.checkedAt
+      ? currentStatus
+      : {
+          id: service.id,
+          name: service.name,
+          group: service.group ?? null,
+          status:
+            materialized.status === 'operational'
+              ? ('up' as const)
+              : materialized.status === 'outage'
+                ? ('down' as const)
+                : ('unknown' as const),
+          checkedAt: snapshotUpdatedAt,
+        }
+    resolvedStatuses.set(service.id, statusRecord)
+
+    const stale = isStale(statusRecord.checkedAt, now, staleAfterMinutes)
+    const status = stale ? 'unknown' : mapServiceState(statusRecord.status)
+
+    return {
+      ...materialized,
+      name: service.name,
+      group: service.group ?? null,
+      status,
+      notes: getServiceNotes(service, status, statusRecord.checkedAt, stale),
+    }
+  })
+
+  return { services, statuses: resolvedStatuses }
 }
 
 function isMaterializedSnapshotFresh(updatedAt: string, now: Date): boolean {
@@ -394,6 +430,7 @@ export async function handlePublicMaintenance(env: unknown, now = new Date()): P
 export async function handlePublicSnapshot(env: unknown, now = new Date()): Promise<Response> {
   const config = getRuntimeConfig(env)
   const database = getWorkerDatabase(env)
+  const statuses = await getRuntimeServiceStatuses(env)
 
   // Prefer the scheduler-materialized services payload: it avoids rescanning
   // 90 days of rollups on every cold cache miss. The read happens before any
@@ -403,20 +440,27 @@ export async function handlePublicSnapshot(env: unknown, now = new Date()): Prom
     materialized !== null && isMaterializedSnapshotFresh(materialized.updatedAt, now)
 
   let services: unknown[]
+  let summaryStatuses = statuses
 
   if (database && materializedFresh) {
-    const resolved = resolveMaterializedServices(materialized!.services, config)
-    services = resolved ?? (await buildRuntimeServicesPayload(config, database, now))
+    const resolved = resolveMaterializedServices(
+      materialized!.services,
+      config,
+      statuses,
+      materialized!.updatedAt,
+      now
+    )
+    services = resolved?.services ?? (await buildRuntimeServicesPayload(config, database, now))
+    summaryStatuses = resolved?.statuses ?? statuses
   } else {
     services = await buildServicesPayload(env, now)
   }
 
-  const statuses = await getRuntimeServiceStatuses(env)
   const incidents = database ? await listPublicIncidents(database) : []
 
   return publicJson({
     product: buildPublicProduct(config),
-    summary: buildSummaryPayload(config, statuses, now),
+    summary: buildSummaryPayload(config, summaryStatuses, now),
     services,
     incidents: buildIncidentPayload(incidents),
     maintenance: buildMaintenancePayload(config, now),

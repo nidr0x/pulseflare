@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest'
 import type { StatusConfig } from '@pulseflare/schema'
 
 import { runScheduledChecks } from './scheduler'
-import { buildRuntimeServicesPayload } from '../routes/public'
+import { buildRuntimeServicesPayload, handlePublicSnapshot } from '../routes/public'
 import { createMigrationBackedD1Database } from '../testing/sqlite-d1'
 import { getRuntimeConfig } from '../install'
 
 const silentLogger = { info() {}, warn() {}, error() {} } as never
 
 const downProbe = async () => new Response('down', { status: 503 })
+const healthyProbe = async () => new Response('ok')
 
 function createEnv(database: D1Database, services: StatusConfig['services']) {
   return {
@@ -130,6 +131,66 @@ describe('Public snapshot serving materialized data (real migrations)', () => {
     expect(response.status).toBe(200)
     expect(payload.services[0]).toMatchObject({ id: 'api', status: 'outage' })
     expect(checkedAt.endsWith('Z')).toBe(true)
+  })
+
+  it('recomputes service freshness when the materialized payload is still within its TTL', async () => {
+    const { database } = createMigrationBackedD1Database()
+    const checkedAt = new Date(base).toISOString()
+    const env = createEnv(database, [apiService()])
+
+    await runScheduledChecks(env, healthyProbe, checkedAt, healthyProbe, silentLogger)
+
+    const response = await handlePublicSnapshot(
+      env,
+      new Date(Date.parse(checkedAt) + 6 * 60_000)
+    )
+    const payload = (await response.json()) as {
+      summary: { status: string }
+      services: Array<{ status: string; notes: string }>
+    }
+
+    expect(payload.summary.status).toBe('unknown')
+    expect(payload.services[0]).toMatchObject({ status: 'unknown' })
+    expect(payload.services[0]?.notes).toContain('Status data is stale')
+  })
+
+  it('uses current service metadata and stale threshold for matching materialized ids', async () => {
+    const { database } = createMigrationBackedD1Database()
+    const checkedAt = new Date(base).toISOString()
+
+    await runScheduledChecks(
+      createEnv(database, [apiService()]),
+      healthyProbe,
+      checkedAt,
+      healthyProbe,
+      silentLogger
+    )
+
+    const updatedService = { ...apiService(), name: 'New API', group: 'backend' }
+    const updatedEnv = {
+      PULSEFLARE_D1: database,
+      STATUS_CONFIG: {
+        site: { name: 'Pulseflare' },
+        services: [updatedService],
+        staleAfterMinutes: 1,
+        notifications: { providers: [] },
+        maintenances: [],
+      },
+    }
+    const response = await handlePublicSnapshot(
+      updatedEnv,
+      new Date(Date.parse(checkedAt) + 2 * 60_000)
+    )
+    const payload = (await response.json()) as {
+      services: Array<{ name: string; group: string | null; status: string; notes: string }>
+    }
+
+    expect(payload.services[0]).toMatchObject({
+      name: 'New API',
+      group: 'backend',
+      status: 'unknown',
+    })
+    expect(payload.services[0]?.notes).toContain('Status data is stale')
   })
 
   it('falls back to live computation when the materialized row is stale', async () => {
