@@ -145,7 +145,11 @@ function addDayCounts(days: DayHistory, day: string, up: number, down: number): 
   days.set(day, counts)
 }
 
-function summarizeDayHistory(dayKeys: string[], dayCounts: DayHistory) {
+function summarizeDayHistory(
+  dayKeys: string[],
+  dayCounts: DayHistory,
+  options: { historyWindow?: number } = {}
+) {
   let successfulChecks = 0
   let totalChecks = 0
 
@@ -166,10 +170,14 @@ function summarizeDayHistory(dayKeys: string[], dayCounts: DayHistory) {
     return counts.up === 0 ? ('down' as const) : ('degraded' as const)
   })
 
+  // Uptime is always aggregated over the full window, but the shipped history
+  // can be capped (per-location records only need the latest bucket).
+  const historyWindow = options.historyWindow ?? history.length
+
   return {
     uptimePercentage:
       totalChecks > 0 ? Math.round((successfulChecks / totalChecks) * 10000) / 100 : null,
-    history,
+    history: history.slice(-historyWindow),
   }
 }
 
@@ -244,7 +252,9 @@ export async function getPublicServiceHistory(
       const locations = [...serviceHistory.locations.entries()]
         .map(([label, location]) => ({
           label: mapPublicLocationLabel(label),
-          ...summarizeDayHistory(dayKeys, location.days),
+          // Consumers only render the latest state per location, so shipping
+          // the full 90-day window per location would be dead payload weight.
+          ...summarizeDayHistory(dayKeys, location.days, { historyWindow: 1 }),
           latencyMs: location.latencyMs,
         }))
         .sort((left, right) => left.label.localeCompare(right.label))
@@ -275,6 +285,58 @@ function mapIncidentImpact(impact: string): PublicIncidentRecord['impact'] {
   }
 
   throw new Error(`Unexpected incident impact value: ${impact}`)
+}
+
+export type MaterializedSnapshotServices = {
+  updatedAt: string
+  services: unknown[]
+}
+
+export async function readMaterializedSnapshotServices(
+  database: D1Database
+): Promise<MaterializedSnapshotServices | null> {
+  const row = (await database
+    .prepare('SELECT updated_at, payload_json FROM snapshot_state WHERE id = 1')
+    .first()) as { updated_at?: unknown; payload_json?: unknown } | null
+
+  if (
+    !row ||
+    typeof row.updated_at !== 'string' ||
+    typeof row.payload_json !== 'string'
+  ) {
+    return null
+  }
+
+  try {
+    const services: unknown = JSON.parse(row.payload_json)
+
+    if (!Array.isArray(services)) {
+      return null
+    }
+
+    return { updatedAt: row.updated_at, services }
+  } catch {
+    return null
+  }
+}
+
+export async function writeMaterializedSnapshotServices(
+  database: D1Database,
+  updatedAt: string,
+  services: unknown[]
+): Promise<void> {
+  await database
+    .prepare(
+      `
+        INSERT INTO snapshot_state (id, updated_at, payload_json)
+        VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          updated_at = excluded.updated_at,
+          payload_json = excluded.payload_json
+      `
+    )
+    .bind(updatedAt, JSON.stringify(services))
+    .run()
 }
 
 export async function listPublicIncidents(database: D1Database): Promise<PublicIncidentRecord[]> {

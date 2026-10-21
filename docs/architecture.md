@@ -81,9 +81,10 @@ The app shell starts in [`apps/web/src/App.tsx`](../apps/web/src/App.tsx), while
 ### Public status
 
 1. A browser requests `/api/public/snapshot`.
-2. The Worker reads current status, persisted check history, incidents, and config-backed maintenance.
-3. The Worker returns one canonical public snapshot with short-lived cache headers.
-4. React routes render the overview or incidents view with that snapshot.
+2. The Worker checks the data-center Cache API before reading materialized snapshot state, incidents, and config-backed maintenance.
+3. On a cache miss, the Worker first reads the services payload the last scheduled run materialized into the `snapshot_state` table. When that row is fresher than ten minutes and covers the configured services, it serves it directly instead of rescanning per-location rollup history; it falls back to live computation when the row is missing, stale, or does not match the current config (services removed from config disappear immediately; newly added services appear after the next scheduled run).
+4. The Worker returns one canonical public snapshot with short-lived cache headers and stores a copy in the edge cache.
+5. React routes render the overview or incidents view with that snapshot and refresh at most every five minutes, or immediately when the tab becomes visible.
 
 ### First-time install bootstrap
 
@@ -101,8 +102,9 @@ The runtime path is:
 2. Scheduled Worker runs evaluate HTTP and TCP checks and normalize results.
 3. D1 stores the latest service status, failed check details, daily per-location counts and latency, open or resolved incidents, and notification jobs.
 4. The configured regional failure policy and consecutive failure/recovery thresholds determine incident transitions.
-5. Webhook jobs respect the notification grace period and retry with backoff.
+5. Webhook jobs are queued when the grace-period-gated incident opens and retry with backoff.
 6. Public APIs read from persisted state instead of exposing storage internals directly.
+7. After pruning, each run stores the exact services payload the public snapshot would compute into the single-row `snapshot_state` table. Snapshot requests serve that row while it is fresh; materialization failures are logged and never fail the run itself. Schedules that run less often than every ten minutes gain nothing from the materialized row, since the freshness window expires between runs.
 
 ## Persistence model
 
@@ -121,7 +123,7 @@ Later migrations add:
 - `scheduler_runs`
 - `scheduler_lease`
 
-Public summaries and incident history remain queryable without a single serialized state blob. Daily rollups power aggregate and per-location history; raw failure details and completed notification jobs are pruned according to configured retention, with cleanup scheduled at most once per day. Public latency is the median across reporting probe locations.
+Public summaries and incident history remain queryable without a single serialized state blob. Daily rollups power aggregate history; the aggregate service history ships the full retention window, while per-location records ship only their latest bucket because the UI renders one state per location. Raw failure details and completed notification jobs are pruned according to configured retention, with cleanup scheduled at most once per day. Public latency is the median across reporting probe locations.
 
 ## Project constraints
 

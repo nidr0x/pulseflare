@@ -31,9 +31,10 @@ Public site metadata includes:
 - `name`: required display name
 - `description`: optional public subtitle
 - `url`: optional canonical status URL
-- `brand.logo`: optional asset path for the site logo
-- `brand.icon`: optional asset path for the favicon or app icon
+- `brand.logo`: optional asset path or `https://` URL for the site logo
+- `brand.icon`: optional asset path or `https://` URL for the favicon or app icon
 - `navigation`: optional external links shown in the public UI
+- the content security policy allows `https://` images, so externally hosted logos and icons load
 
 ### `services`
 
@@ -275,7 +276,7 @@ The Worker currently:
 - configured checks run with a maximum of four checks in flight; results are folded back into config order
 - scheduled runs dispatch webhook notifications on incident open and resolve transitions
 - webhook delivery has a 10-second timeout and a maximum of four deliveries in flight, preserving order for each provider, incident, and service
-- notification grace periods delay incident opening and webhook delivery until sustained failure is confirmed
+- notification grace periods delay incident opening until sustained failure is confirmed; webhook dispatches due at incident-open time retry with backoff
 - active maintenance windows suppress incident-open notifications for affected services
 - the Worker exposes public summary, services, incidents, and maintenance routes
 - the status page reads `/api/public/snapshot` and uses an empty unknown state when it is unavailable

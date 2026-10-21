@@ -1,7 +1,9 @@
-import type { StatusService } from '@pulseflare/schema'
+import type { StatusConfig, StatusService } from '@pulseflare/schema'
 
 import { getRemoteProbeToken, getRemoteProbeUrl, getWorkerDatabase, getWorkerSecret } from '../config'
 import { getRuntimeConfig, syncServices } from '../install'
+import { buildRuntimeServicesPayload } from '../routes/public'
+import { writeMaterializedSnapshotServices } from '../repositories/d1'
 import { runConfiguredCheck, type CheckRunResult } from './check-runner'
 import { deriveIncidentMutation, type IncidentMutation } from './incident-engine'
 import { emitObservabilityEvent, getObservabilityError, type ObservabilityLogger } from '../observability'
@@ -611,6 +613,28 @@ async function failSchedulerRun(database: D1Database, id: string, finishedAt: st
     .run()
 }
 
+async function materializeSnapshotServices(
+  database: D1Database,
+  config: StatusConfig,
+  checkedAt: string,
+  runId: string,
+  logger: ObservabilityLogger
+): Promise<void> {
+  try {
+    const services = await buildRuntimeServicesPayload(config, database, new Date(checkedAt))
+    await writeMaterializedSnapshotServices(database, checkedAt, services)
+  } catch (error) {
+    // Materialization must never fail the run itself; the public snapshot
+    // falls back to live computation while the stored row is missing or stale.
+    emitObservabilityEvent(
+      'error',
+      'scheduler.snapshot_materialization_failed',
+      { runId, error: getObservabilityError(error) },
+      logger
+    )
+  }
+}
+
 export async function runScheduledChecks(
   env: unknown,
   fetcher: Fetcher = globalThis.fetch,
@@ -848,6 +872,8 @@ export async function runScheduledChecks(
 
     await leaseGuard.ensure()
     await pruneHistoricalData(database, config.retentionDays ?? DEFAULT_RETENTION_DAYS, checkedAt)
+
+    await materializeSnapshotServices(database, config, checkedAt, runId, logger)
 
     const summary = {
       servicesChecked: config.services.length,

@@ -99,11 +99,19 @@ CREATE TABLE IF NOT EXISTS scheduler_lease (
   last_pruned_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS snapshot_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  updated_at TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS check_results_service_recorded_idx ON check_results(service_id, recorded_at);
 CREATE INDEX IF NOT EXISTS check_results_recorded_idx ON check_results(recorded_at);
 CREATE INDEX IF NOT EXISTS latency_points_recorded_idx ON latency_points(recorded_at);
 CREATE INDEX IF NOT EXISTS notification_outbox_created_status_idx ON notification_outbox(status, created_at);
 CREATE INDEX IF NOT EXISTS notification_outbox_pending_idx ON notification_outbox(status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS notification_outbox_claim_idx
+  ON notification_outbox(status, next_attempt_at, claimed_until);
 CREATE INDEX IF NOT EXISTS scheduler_runs_started_idx ON scheduler_runs(started_at);
 CREATE INDEX IF NOT EXISTS daily_check_rollups_day_idx ON daily_check_rollups(day);
 CREATE UNIQUE INDEX IF NOT EXISTS incidents_one_open_per_service_idx
@@ -117,8 +125,19 @@ type CountRow = {
   service_count: number | string | null
 }
 
+const parsedRuntimeConfigs = new WeakMap<StatusConfig, StatusConfig>()
+
 export function getRuntimeConfig(env: unknown): StatusConfig {
-  return parseStatusConfig(getWorkerConfig(env) ?? defaultStatusConfig)
+  const source = getWorkerConfig(env) ?? defaultStatusConfig
+  const cached = parsedRuntimeConfigs.get(source)
+
+  if (cached) {
+    return cached
+  }
+
+  const parsed = parseStatusConfig(source)
+  parsedRuntimeConfigs.set(source, parsed)
+  return parsed
 }
 
 export async function ensureBootstrapSchema(database: D1Database): Promise<void> {

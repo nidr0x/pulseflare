@@ -20,13 +20,19 @@ function formatCheckedAt(value: string | null): string {
     return 'Awaiting first successful check'
   }
 
+  const checkedAt = new Date(value)
+
+  if (Number.isNaN(checkedAt.getTime())) {
+    return 'an unknown time'
+  }
+
   return new Intl.DateTimeFormat('en-GB', {
     day: '2-digit',
     month: 'short',
     hour: '2-digit',
     minute: '2-digit',
     timeZoneName: 'short',
-  }).format(new Date(value))
+  }).format(checkedAt)
 }
 
 export function HeroStatus({ product, summary, loadState = 'ready', now, onRetry }: HeroStatusProps) {

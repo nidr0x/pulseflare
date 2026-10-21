@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { getPublicServiceHistory, listPublicServiceStatuses } from './d1'
+import {
+  getPublicServiceHistory,
+  listPublicServiceStatuses,
+  readMaterializedSnapshotServices,
+  writeMaterializedSnapshotServices,
+} from './d1'
 
 describe('listPublicServiceStatuses', () => {
   it('preserves missing status rows instead of treating them as healthy', async () => {
@@ -160,9 +165,120 @@ describe('getPublicServiceHistory', () => {
       history: ['up', 'degraded'],
       historyDays: ['2026-04-24', '2026-04-25'],
       locations: [
-        { label: 'fra', uptimePercentage: 100, history: ['up', 'up'], latencyMs: 31 },
-        { label: 'iad', uptimePercentage: 66.67, history: ['up', 'degraded'], latencyMs: 45 },
+        { label: 'fra', uptimePercentage: 100, history: ['up'], latencyMs: 31 },
+        { label: 'iad', uptimePercentage: 66.67, history: ['degraded'], latencyMs: 45 },
       ],
     })
+  })
+
+  it('trims per-location history to the latest bucket while keeping the full service window', async () => {
+    const database = {
+      prepare() {
+        return {
+          bind() {
+            return {
+              async all() {
+                return {
+                  results: [
+                    {
+                      service_id: 'api',
+                      day: '2026-04-25',
+                      up_count: 0,
+                      down_count: 2,
+                      location_label: 'region:iad',
+                      last_latency_ms: 90,
+                    },
+                    {
+                      service_id: 'api',
+                      day: '2026-04-24',
+                      up_count: 2,
+                      down_count: 0,
+                      location_label: 'region:iad',
+                      last_latency_ms: 30,
+                    },
+                  ],
+                }
+              },
+            }
+          },
+        }
+      },
+    } as unknown as D1Database
+
+    const history = await getPublicServiceHistory(
+      database,
+      new Date('2026-04-25T12:00:00.000Z'),
+      2
+    )
+
+    const record = history.get('api')
+
+    expect(record?.history).toEqual(['up', 'down'])
+    expect(record?.locations).toEqual([
+      { label: 'iad', uptimePercentage: 50, history: ['down'], latencyMs: 90 },
+    ])
+  })
+})
+
+describe('materialized snapshot services', () => {
+  function createSnapshotStateFake() {
+    const store: { row: { updated_at: string; payload_json: string } | null } = { row: null }
+
+    return {
+      store,
+      database: {
+        prepare(query: string) {
+          if (query.includes('FROM snapshot_state') || query.includes('INTO snapshot_state')) {
+            return {
+              bind(...values: unknown[]) {
+                return {
+                  async run() {
+                    store.row = {
+                      updated_at: values[0] as string,
+                      payload_json: values[1] as string,
+                    }
+                  },
+                }
+              },
+              async first() {
+                return store.row ? { ...store.row } : null
+              },
+            }
+          }
+
+          throw new Error(`Unexpected query: ${query}`)
+        },
+      } as unknown as D1Database,
+    }
+  }
+
+  it('returns null while no snapshot row has been written', async () => {
+    const { database } = createSnapshotStateFake()
+
+    await expect(readMaterializedSnapshotServices(database)).resolves.toBeNull()
+  })
+
+  it('roundtrips the services payload through snapshot_state', async () => {
+    const { database } = createSnapshotStateFake()
+    const services = [{ id: 'api', name: 'API', status: 'outage' }]
+
+    await writeMaterializedSnapshotServices(database, '2026-04-25T08:04:00.000Z', services)
+
+    await expect(readMaterializedSnapshotServices(database)).resolves.toEqual({
+      updatedAt: '2026-04-25T08:04:00.000Z',
+      services,
+    })
+  })
+
+  it('treats corrupt or non-array payloads as missing', async () => {
+    const { database, store } = createSnapshotStateFake()
+
+    store.row = { updated_at: '2026-04-25T08:04:00.000Z', payload_json: '{corrupt' }
+
+    await expect(readMaterializedSnapshotServices(database)).resolves.toBeNull()
+
+    store.row = { updated_at: '2026-04-25T08:04:00.000Z', payload_json: '"not-an-array"' }
+
+    await expect(readMaterializedSnapshotServices(database)).resolves.toBeNull()
   })
 })

@@ -1,6 +1,12 @@
 export type SummaryState = 'operational' | 'degraded' | 'unknown'
 export type SnapshotLoadState = 'idle' | 'loading' | 'ready' | 'error'
 export const DEFAULT_STALE_AFTER_MINUTES = 5
+// Public snapshots scan the full 90-day rollup window. Poll infrequently and
+// rely on the edge cache plus focus refreshes to keep D1 reads bounded.
+export const PUBLIC_REFRESH_INTERVAL_MS = 5 * 60_000
+// Bound every public API call so a hung connection resolves to the error state
+// instead of leaving the page in a loading loop forever.
+export const DEFAULT_PUBLIC_FETCH_TIMEOUT_MS = 10_000
 
 export type ServiceState = 'operational' | 'degraded' | 'outage' | 'unknown'
 export type UptimeWindowState = 'up' | 'degraded' | 'down' | 'unknown'
@@ -114,14 +120,15 @@ export const EMPTY_INCIDENT_PAGE_DATA: IncidentPageData = {
 
 async function fetchJson<T>(
   path: string,
-  fetcher: typeof fetch | undefined = globalThis.fetch
+  fetcher: typeof fetch | undefined = globalThis.fetch,
+  timeoutMs = DEFAULT_PUBLIC_FETCH_TIMEOUT_MS
 ): Promise<T | null> {
   if (typeof fetcher !== 'function') {
     return null
   }
 
   try {
-    const response = await fetcher(path)
+    const response = await fetcher(path, { signal: AbortSignal.timeout(timeoutMs) })
 
     if (!response.ok) {
       return null
@@ -134,21 +141,24 @@ async function fetchJson<T>(
 }
 
 export async function fetchPublicSnapshot(
-  fetcher: typeof fetch | undefined = globalThis.fetch
+  fetcher: typeof fetch | undefined = globalThis.fetch,
+  timeoutMs = DEFAULT_PUBLIC_FETCH_TIMEOUT_MS
 ): Promise<PublicSnapshotPayload | null> {
-  return fetchJson<PublicSnapshotPayload>('/api/public/snapshot', fetcher)
+  return fetchJson<PublicSnapshotPayload>('/api/public/snapshot', fetcher, timeoutMs)
 }
 
 export async function fetchPublicIncidentPage(
-  fetcher: typeof fetch | undefined = globalThis.fetch
+  fetcher: typeof fetch | undefined = globalThis.fetch,
+  timeoutMs = DEFAULT_PUBLIC_FETCH_TIMEOUT_MS
 ): Promise<IncidentPageData | null> {
-  return fetchJson<IncidentPageData>('/api/public/incidents', fetcher)
+  return fetchJson<IncidentPageData>('/api/public/incidents', fetcher, timeoutMs)
 }
 
 export async function fetchPublicSummary(
-  fetcher: typeof fetch | undefined = globalThis.fetch
+  fetcher: typeof fetch | undefined = globalThis.fetch,
+  timeoutMs = DEFAULT_PUBLIC_FETCH_TIMEOUT_MS
 ): Promise<PublicSummaryPayload | null> {
-  return fetchJson<PublicSummaryPayload>('/api/public/summary', fetcher)
+  return fetchJson<PublicSummaryPayload>('/api/public/summary', fetcher, timeoutMs)
 }
 
 export function mergeSummaryIntoSnapshot(
@@ -176,10 +186,6 @@ export async function getIncidentPageData(fetcher?: typeof fetch): Promise<Incid
   }
 
   return pageData
-}
-
-export function getInitialStatusSnapshot(): StatusSnapshot {
-  return EMPTY_STATUS_SNAPSHOT
 }
 
 export type SnapshotFreshness = {
@@ -213,6 +219,10 @@ export function getSnapshotFreshness(
 }
 
 export function formatDuration(milliseconds: number): string {
+  if (!Number.isFinite(milliseconds)) {
+    return 'unknown duration'
+  }
+
   const seconds = Math.max(0, Math.round(milliseconds / 1000))
 
   if (seconds < 60) {

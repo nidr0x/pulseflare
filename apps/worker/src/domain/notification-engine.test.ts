@@ -61,7 +61,7 @@ const config = {
 } satisfies StatusConfig
 
 describe('notification engine', () => {
-  it('queues incident notifications after the configured grace period', async () => {
+  it('queues open notifications as immediately due once the incident is opened', async () => {
     const { database, runs } = createFakeDatabase([])
 
     await enqueueNotificationDispatches(database, config, {
@@ -78,7 +78,7 @@ describe('notification engine', () => {
       'incident-1',
       'api',
       expect.stringContaining('API failed'),
-      '2026-04-25T08:05:00.000Z',
+      '2026-04-25T08:00:00.000Z',
       '2026-04-25T08:00:00.000Z',
     ])
   })

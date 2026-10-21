@@ -285,8 +285,26 @@ function assertStatusMaintenance(value: unknown, index: number, serviceIds: Set<
   assertNonEmptyString(value.body, `maintenance ${index} body`)
   assertNonEmptyString(value.start, `maintenance ${index} start`)
 
+  // Scheduling compares parsed timestamps, so reject unparseable values and
+  // inverted windows up front instead of producing silent NaN scheduling.
+  const startMs = Date.parse(value.start)
+
+  if (!Number.isFinite(startMs)) {
+    throw new Error(`Invalid maintenance ${index} start date`)
+  }
+
   if (value.end !== undefined) {
     assertNonEmptyString(value.end, `maintenance ${index} end`)
+
+    const endMs = Date.parse(value.end)
+
+    if (!Number.isFinite(endMs)) {
+      throw new Error(`Invalid maintenance ${index} end date`)
+    }
+
+    if (endMs <= startMs) {
+      throw new Error(`Invalid maintenance ${index} end before start`)
+    }
   }
 
   const services = value.services
@@ -406,8 +424,15 @@ export function parseStatusConfig(config: unknown): StatusConfig {
     throw new Error('Invalid notification providers')
   }
 
+  const providerIds = new Set<string>()
   for (const [index, provider] of notifications.providers.entries()) {
     assertStatusProvider(provider, index)
+
+    if (providerIds.has(provider.id)) {
+      throw new Error(`Duplicate notification provider id: ${provider.id}`)
+    }
+
+    providerIds.add(provider.id)
   }
 
   const maintenances = config.maintenances
@@ -417,8 +442,16 @@ export function parseStatusConfig(config: unknown): StatusConfig {
 
   const knownServiceIds = serviceIds
 
+  const maintenanceIds = new Set<string>()
+
   for (const [index, maintenance] of maintenances.entries()) {
     assertStatusMaintenance(maintenance, index, knownServiceIds)
+
+    if (maintenanceIds.has(maintenance.id)) {
+      throw new Error(`Duplicate maintenance id: ${maintenance.id}`)
+    }
+
+    maintenanceIds.add(maintenance.id)
   }
 
   if (config.staleAfterMinutes !== undefined) {

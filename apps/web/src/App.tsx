@@ -7,6 +7,7 @@ import {
   EMPTY_STATUS_SNAPSHOT,
   getIncidentPageData,
   getStatusSnapshot,
+  PUBLIC_REFRESH_INTERVAL_MS,
   type IncidentPageData,
   type SnapshotLoadState,
   type StatusProduct,
@@ -113,7 +114,7 @@ export default function App() {
         setSnapshotLoadState('loading')
       })
 
-      let nextDelay = 60_000
+      let nextDelay = PUBLIC_REFRESH_INTERVAL_MS
 
       try {
         if (pathname === '/incidents') {

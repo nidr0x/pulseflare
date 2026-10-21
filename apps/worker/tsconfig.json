@@ -11,10 +11,9 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "paths": {
-      "@pulseflare/core": ["../../packages/core/src/index.ts"],
       "@pulseflare/schema": ["../../packages/schema/src/index.ts"]
     }
   },
-  "references": [{ "path": "../../packages/core" }, { "path": "../../packages/schema" }, { "path": "../../config" }],
+  "references": [{ "path": "../../packages/schema" }, { "path": "../../config" }],
   "include": ["src/**/*.ts", "src/**/*.tsx", "worker-configuration.d.ts"]
 }

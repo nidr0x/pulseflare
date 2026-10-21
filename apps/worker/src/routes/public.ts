@@ -1,11 +1,13 @@
 import type { StatusConfig, StatusService } from '@pulseflare/schema'
 
-import { getWorkerConfig, getWorkerDatabase } from '../config'
+import { getWorkerDatabase } from '../config'
+import { getRuntimeConfig } from '../install'
 import {
   getPublicServiceHistory,
   listPublicIncidents,
   listPublicServiceStatuses,
   getLatestSchedulerRun,
+  readMaterializedSnapshotServices,
   type PublicServiceHistoryRecord,
   type PublicServiceStatusRecord,
 } from '../repositories/d1'
@@ -26,6 +28,9 @@ const HISTORY_WINDOW_DAYS = 90
 const MAINTENANCE_RESPONSE_LIMIT = 10
 const RECENT_MAINTENANCE_WINDOW_DAYS = 30
 const DEFAULT_STALE_AFTER_MINUTES = 5
+// Materialized snapshots are refreshed once per scheduled run; allow several
+// missed crons before falling back to live computation.
+const MATERIALIZED_SNAPSHOT_MAX_AGE_MS = 10 * 60_000
 
 function publicJson(data: unknown): Response {
   return Response.json(data, {
@@ -108,7 +113,7 @@ function buildSummaryPayload(
 }
 
 export async function handlePublicSummary(env: unknown, now = new Date()): Promise<Response> {
-  const config = getConfig(env)
+  const config = getRuntimeConfig(env)
   const statuses = await getRuntimeServiceStatuses(env)
 
   return publicJson(buildSummaryPayload(config, statuses, now))
@@ -218,28 +223,74 @@ async function getRuntimeServiceHistory(env: unknown, now: Date): Promise<Map<st
   return getPublicServiceHistory(database, now, HISTORY_WINDOW_DAYS)
 }
 
-function getConfig(env: unknown): StatusConfig {
-  return (
-    getWorkerConfig(env) ?? {
-      site: { name: 'Pulseflare' },
-      services: [],
-      notifications: { providers: [] },
-      maintenances: [],
-    }
-  )
-}
-
-async function buildServicesPayload(env: unknown, now: Date) {
-  const config = getConfig(env)
-  const [statuses, history] = await Promise.all([
-    getRuntimeServiceStatuses(env),
-    getRuntimeServiceHistory(env, now),
+/**
+ * Builds the services slice of the public payloads from raw repository data.
+ * Shared by the routes (live fallback) and the scheduler, which materializes
+ * the exact same payload into `snapshot_state` after each completed run.
+ */
+export async function buildRuntimeServicesPayload(
+  config: StatusConfig,
+  database: D1Database,
+  now: Date
+): Promise<unknown[]> {
+  const [statusRecords, history] = await Promise.all([
+    listPublicServiceStatuses(database),
+    getPublicServiceHistory(database, now, HISTORY_WINDOW_DAYS),
   ])
+  const statuses = new Map(statusRecords.map((record) => [record.id, record]))
   const staleAfterMinutes = config.staleAfterMinutes ?? DEFAULT_STALE_AFTER_MINUTES
 
   return config.services.map((service) =>
     buildServicePayload(service, statuses.get(service.id), history.get(service.id), now, staleAfterMinutes)
   )
+}
+
+async function buildServicesPayload(env: unknown, now: Date) {
+  const config = getRuntimeConfig(env)
+  const database = getWorkerDatabase(env)
+
+  if (!database) {
+    const staleAfterMinutes = config.staleAfterMinutes ?? DEFAULT_STALE_AFTER_MINUTES
+    return config.services.map((service) =>
+      buildServicePayload(service, undefined, undefined, now, staleAfterMinutes)
+    )
+  }
+
+  return buildRuntimeServicesPayload(config, database, now)
+}
+
+/**
+ * Returns the materialized payload filtered and ordered by the current config
+ * (`ghost` services removed after config changes). Returns null when the
+ * materialized data cannot fully cover the config, signaling a live fallback.
+ */
+function resolveMaterializedServices(
+  materializedServices: unknown[],
+  config: StatusConfig
+): unknown[] | null {
+  const byId = new Map<string, Record<string, unknown>>()
+
+  for (const entry of materializedServices) {
+    if (entry && typeof entry === 'object' && 'id' in entry) {
+      const id = (entry as { id: unknown }).id
+
+      if (typeof id === 'string') {
+        byId.set(id, entry as Record<string, unknown>)
+      }
+    }
+  }
+
+  if (!config.services.every((service) => byId.has(service.id))) {
+    return null
+  }
+
+  return config.services.map((service) => byId.get(service.id) as unknown)
+}
+
+function isMaterializedSnapshotFresh(updatedAt: string, now: Date): boolean {
+  const updatedAtMs = Date.parse(updatedAt)
+  const ageMs = now.getTime() - updatedAtMs
+  return Number.isFinite(updatedAtMs) && ageMs >= 0 && ageMs <= MATERIALIZED_SNAPSHOT_MAX_AGE_MS
 }
 
 export async function handlePublicServices(env: unknown, now = new Date()): Promise<Response> {
@@ -266,7 +317,7 @@ function buildIncidentPayload(incidents: Awaited<ReturnType<typeof listPublicInc
 }
 
 export async function handlePublicIncidents(env: unknown, now = new Date()): Promise<Response> {
-  const config = getConfig(env)
+  const config = getRuntimeConfig(env)
   const database = getWorkerDatabase(env)
   const [incidents, maintenance] = await Promise.all([
     database ? listPublicIncidents(database) : Promise.resolve([]),
@@ -337,39 +388,53 @@ function buildMaintenancePayload(config: StatusConfig, now: Date) {
 }
 
 export async function handlePublicMaintenance(env: unknown, now = new Date()): Promise<Response> {
-  return publicJson({ maintenance: buildMaintenancePayload(getConfig(env), now) })
+  return publicJson({ maintenance: buildMaintenancePayload(getRuntimeConfig(env), now) })
 }
 
 export async function handlePublicSnapshot(env: unknown, now = new Date()): Promise<Response> {
-  const config = getConfig(env)
+  const config = getRuntimeConfig(env)
   const database = getWorkerDatabase(env)
-  const [statuses, history, incidents] = await Promise.all([
-    getRuntimeServiceStatuses(env),
-    getRuntimeServiceHistory(env, now),
-    database ? listPublicIncidents(database) : Promise.resolve([]),
-  ])
-  const staleAfterMinutes = config.staleAfterMinutes ?? DEFAULT_STALE_AFTER_MINUTES
+
+  // Prefer the scheduler-materialized services payload: it avoids rescanning
+  // 90 days of rollups on every cold cache miss. The read happens before any
+  // history query so a fresh row skips the heavy scan entirely.
+  const materialized = database ? await readMaterializedSnapshotServices(database) : null
+  const materializedFresh =
+    materialized !== null && isMaterializedSnapshotFresh(materialized.updatedAt, now)
+
+  let services: unknown[]
+
+  if (database && materializedFresh) {
+    const resolved = resolveMaterializedServices(materialized!.services, config)
+    services = resolved ?? (await buildRuntimeServicesPayload(config, database, now))
+  } else {
+    services = await buildServicesPayload(env, now)
+  }
+
+  const statuses = await getRuntimeServiceStatuses(env)
+  const incidents = database ? await listPublicIncidents(database) : []
 
   return publicJson({
     product: buildPublicProduct(config),
     summary: buildSummaryPayload(config, statuses, now),
-    services: config.services.map((service) =>
-      buildServicePayload(service, statuses.get(service.id), history.get(service.id), now, staleAfterMinutes)
-    ),
+    services,
     incidents: buildIncidentPayload(incidents),
     maintenance: buildMaintenancePayload(config, now),
   })
 }
 
 export async function handleHealth(env: unknown, now = new Date()): Promise<Response> {
+  // Health must always reflect the latest scheduler state, so browsers and
+  // intermediaries are told never to cache it.
+  const headers = { 'cache-control': 'no-store' }
   const database = getWorkerDatabase(env)
 
   if (!database) {
-    return Response.json({ status: 'unknown', lastRun: null }, { status: 503 })
+    return Response.json({ status: 'unknown', lastRun: null }, { status: 503, headers })
   }
 
   const lastRun = await getLatestSchedulerRun(database)
-  const staleAfterMinutes = getConfig(env).staleAfterMinutes ?? DEFAULT_STALE_AFTER_MINUTES
+  const staleAfterMinutes = getRuntimeConfig(env).staleAfterMinutes ?? DEFAULT_STALE_AFTER_MINUTES
   const healthy =
     lastRun?.status === 'succeeded' &&
     Boolean(lastRun.finishedAt) &&
@@ -388,6 +453,6 @@ export async function handleHealth(env: unknown, now = new Date()): Promise<Resp
           }
         : null,
     },
-    { status: healthy ? 200 : 503 }
+    { status: healthy ? 200 : 503, headers }
   )
 }

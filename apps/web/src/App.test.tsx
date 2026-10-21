@@ -3,11 +3,25 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 import App, { resolveRoutePath } from './App'
 import { filterEntriesByService, mergeTimelineEntries } from './components/IncidentTimeline'
-import { getInitialStatusSnapshot, getStatusSnapshot, mergeSummaryIntoSnapshot } from './lib/api'
+import { HeroStatus } from './components/HeroStatus'
+import {
+  DEFAULT_PUBLIC_FETCH_TIMEOUT_MS,
+  EMPTY_STATUS_SNAPSHOT,
+  fetchPublicSnapshot,
+  formatDuration,
+  getSnapshotFreshness,
+  getStatusSnapshot,
+  mergeSummaryIntoSnapshot,
+  PUBLIC_REFRESH_INTERVAL_MS,
+} from './lib/api'
 import { HomePage } from './routes/HomePage'
 import { IncidentsPage } from './routes/IncidentsPage'
 
 describe('App', () => {
+  it('keeps public polling at a free-tier-safe interval', () => {
+    expect(PUBLIC_REFRESH_INTERVAL_MS).toBeGreaterThanOrEqual(5 * 60_000)
+  })
+
   it('renders the simplified public status layout', () => {
     const html = renderToStaticMarkup(<App />)
 
@@ -17,7 +31,7 @@ describe('App', () => {
   })
 
   it('renders the status page without the incident timeline', () => {
-    const html = renderToStaticMarkup(<HomePage snapshot={getInitialStatusSnapshot()} />)
+    const html = renderToStaticMarkup(<HomePage snapshot={EMPTY_STATUS_SNAPSHOT} />)
 
     expect(html).toContain('Uptime over the last 90 days')
     expect(html).toContain('No services configured yet.')
@@ -31,9 +45,9 @@ describe('App', () => {
         now={Date.parse('2026-04-25T08:10:00.000Z')}
         onRetry={() => undefined}
         snapshot={{
-          ...getInitialStatusSnapshot(),
+          ...EMPTY_STATUS_SNAPSHOT,
           summary: {
-            ...getInitialStatusSnapshot().summary,
+            ...EMPTY_STATUS_SNAPSHOT.summary,
             checkedAt: '2026-04-25T08:01:00.000Z',
             staleAfterMinutes: 5,
           },
@@ -48,7 +62,7 @@ describe('App', () => {
 
   it('shows a refresh action when snapshot loading fails', () => {
     const html = renderToStaticMarkup(
-      <HomePage loadState="error" onRetry={() => undefined} snapshot={getInitialStatusSnapshot()} />
+      <HomePage loadState="error" onRetry={() => undefined} snapshot={EMPTY_STATUS_SNAPSHOT} />
     )
 
     expect(html).toContain('Live status unavailable')
@@ -59,7 +73,7 @@ describe('App', () => {
     const html = renderToStaticMarkup(
       <HomePage
         snapshot={{
-          ...getInitialStatusSnapshot(),
+          ...EMPTY_STATUS_SNAPSHOT,
           services: [
             {
               id: 'api',
@@ -91,7 +105,7 @@ describe('App', () => {
     const html = renderToStaticMarkup(
       <IncidentsPage
         snapshot={{
-          ...getInitialStatusSnapshot(),
+          ...EMPTY_STATUS_SNAPSHOT,
           incidents: [
             {
               id: 'incident-1',
@@ -112,7 +126,7 @@ describe('App', () => {
   })
 
   it('renders the incidents route as the dedicated history view', () => {
-    const html = renderToStaticMarkup(<IncidentsPage snapshot={getInitialStatusSnapshot()} />)
+    const html = renderToStaticMarkup(<IncidentsPage snapshot={EMPTY_STATUS_SNAPSHOT} />)
 
     expect(html).toContain('Incidents &amp; Maintenance')
     expect(html).toContain('Full incident history')
@@ -194,7 +208,7 @@ describe('App', () => {
   })
 
   it('hydrates the initial snapshot summary while keeping the rest of the snapshot intact', () => {
-    const snapshot = getInitialStatusSnapshot()
+    const snapshot = EMPTY_STATUS_SNAPSHOT
     const next = mergeSummaryIntoSnapshot(snapshot, {
       status: 'degraded',
       checkedAt: '2026-04-19T08:15:00.000Z',
@@ -291,9 +305,55 @@ describe('App', () => {
   })
 
   it('renders the live-data unavailable state', () => {
-    const html = renderToStaticMarkup(<HomePage snapshot={getInitialStatusSnapshot()} loadState="error" />)
+    const html = renderToStaticMarkup(<HomePage snapshot={EMPTY_STATUS_SNAPSHOT} loadState="error" />)
 
     expect(html).toContain('Live status unavailable')
     expect(html).toContain('Retrying automatically')
+  })
+
+  it('keeps a bounded default timeout for public API requests', () => {
+    expect(DEFAULT_PUBLIC_FETCH_TIMEOUT_MS).toBe(10_000)
+  })
+
+  it('aborts hanging public API requests after the timeout instead of waiting forever', async () => {
+    let capturedInit: RequestInit | undefined
+    const hangingFetcher = (async (_input: unknown, init?: RequestInit) => {
+      capturedInit = init
+
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+        )
+      })
+    }) as unknown as typeof fetch
+
+    await expect(fetchPublicSnapshot(hangingFetcher, 10)).resolves.toBeNull()
+    expect(capturedInit?.signal).toBeInstanceOf(AbortSignal)
+    expect(capturedInit?.signal?.aborted).toBe(true)
+  })
+
+  it('renders a fallback last-updated label for an invalid checked-at timestamp', () => {
+    const html = renderToStaticMarkup(
+      <HeroStatus
+        product={{ name: 'Acme', description: 'System health' }}
+        summary={{ ...EMPTY_STATUS_SNAPSHOT.summary, checkedAt: 'not-a-timestamp' }}
+      />
+    )
+
+    expect(html).toContain('Last updated an unknown time')
+  })
+
+  it('returns a readable fallback for an unknown duration', () => {
+    expect(formatDuration(Number.NaN)).toBe('unknown duration')
+  })
+
+  it('treats an invalid checked-at timestamp as not yet fresh data', () => {
+    const freshness = getSnapshotFreshness(
+      'not-a-timestamp',
+      Date.parse('2026-04-25T08:10:00.000Z')
+    )
+
+    expect(freshness.state).toBe('waiting')
+    expect(freshness.ageMs).toBeNull()
   })
 })

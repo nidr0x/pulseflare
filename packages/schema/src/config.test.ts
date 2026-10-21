@@ -217,4 +217,90 @@ describe('status config', () => {
       })
     ).toThrow(/invalid notifications grace period/i)
   })
+
+  it('rejects maintenance windows whose end is not after start', () => {
+    const base = {
+      site: { name: 'Acme Status' },
+      services: [{ id: 'api', name: 'API', checks: [{ type: 'http', url: 'https://a.dev' }] }],
+      notifications: { providers: [] },
+      maintenances: [],
+    }
+
+    expect(() =>
+      parseStatusConfig({
+        ...base,
+        maintenances: [
+          {
+            id: 'm-1',
+            title: 'Redis upgrade',
+            body: 'Short window.',
+            start: 'not-a-date',
+            services: ['api'],
+          },
+        ],
+      })
+    ).toThrow(/invalid maintenance 0 start date/i)
+
+    expect(() =>
+      parseStatusConfig({
+        ...base,
+        maintenances: [
+          {
+            id: 'm-1',
+            title: 'Redis upgrade',
+            body: 'Short window.',
+            start: '2026-04-25T10:00:00.000Z',
+            end: 'earlier-than-parseable',
+            services: ['api'],
+          },
+        ],
+      })
+    ).toThrow(/invalid maintenance 0 end date/i)
+
+    expect(() =>
+      parseStatusConfig({
+        ...base,
+        maintenances: [
+          {
+            id: 'm-1',
+            title: 'Redis upgrade',
+            body: 'Short window.',
+            start: '2026-04-25T10:00:00.000Z',
+            end: '2026-04-25T09:00:00.000Z',
+            services: ['api'],
+          },
+        ],
+      })
+    ).toThrow(/invalid maintenance 0 end before start/i)
+  })
+
+  it('rejects duplicate maintenance ids', () => {
+    expect(() =>
+      parseStatusConfig({
+        site: { name: 'Acme Status' },
+        services: [{ id: 'api', name: 'API', checks: [{ type: 'http', url: 'https://a.dev' }] }],
+        notifications: { providers: [] },
+        maintenances: [
+          { id: 'm-1', title: 'A', body: 'A body', start: '2026-04-25T10:00:00.000Z', services: ['api'] },
+          { id: 'm-1', title: 'B', body: 'B body', start: '2026-04-26T10:00:00.000Z', services: ['api'] },
+        ],
+      })
+    ).toThrow(/duplicate maintenance id: m-1/i)
+  })
+
+  it('rejects duplicate notification provider ids', () => {
+    expect(() =>
+      parseStatusConfig({
+        site: { name: 'Acme Status' },
+        services: [{ id: 'api', name: 'API', checks: [{ type: 'http', url: 'https://a.dev' }] }],
+        notifications: {
+          providers: [
+            { id: 'ops', type: 'webhook', url: 'https://hooks.example.com' },
+            { id: 'ops', type: 'webhook', url: 'https://hooks2.example.com' },
+          ],
+        },
+        maintenances: [],
+      })
+    ).toThrow(/duplicate notification provider id: ops/i)
+  })
 })
