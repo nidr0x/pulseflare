@@ -74,9 +74,10 @@ Push to `main` or run the `Deploy Pulseflare` workflow manually.
 The first deployment will:
 
 - install dependencies
-- run tests, build, and lint
+- run tests, build, and lint in the `verify` job
 - find or create the configured D1 database
 - apply migrations from `apps/worker/migrations`
+- build the web assets in the `deploy` job
 - deploy the Worker from `apps/worker`
 - serve the web UI from `apps/web/dist` as Worker static assets
 - verify `/api/health`, `/api/public/snapshot`, and `/api/public/incidents` on the deployed Worker
@@ -112,7 +113,7 @@ If deployment is skipped, check that `PULSEFLARE_ENABLE_DEPLOY` is a repository 
 
 If a D1 migration fails, check that the API token can edit D1 in the target account before rerunning the workflow.
 
-If static assets do not update, check that the `Verify project` step built `apps/web/dist` before deployment.
+If static assets do not update, check that the `Build web assets` step in the `deploy` job created `apps/web/dist` before deployment.
 
 If a regional probe always reports that no shared endpoint is configured, check that `PULSEFLARE_REMOTE_PROBE_URL` is set as a repository variable and points to an HTTPS probe service. Add the matching `PULSEFLARE_REMOTE_PROBE_TOKEN` secret; the workflow installs it as a Worker secret.
 

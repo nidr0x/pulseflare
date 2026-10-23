@@ -48,27 +48,32 @@ export function HeroStatus({ product, summary, loadState = 'ready', now, onRetry
     return () => window.clearInterval(intervalId)
   }, [now])
 
+  const freshness = getSnapshotFreshness(summary.checkedAt, clockNow, summary.staleAfterMinutes)
+  const isStale = freshness.state === 'stale'
   const headline =
     loadState === 'error'
       ? 'Live status unavailable'
-      : summary.status === 'operational'
-      ? 'All systems operational'
-      : summary.status === 'degraded'
-        ? 'Some systems require attention'
-        : 'Checking current status'
-  const signalStatus = loadState === 'error' ? 'unknown' : summary.status
-  const healthySummary =
+      : isStale
+        ? 'Status data is stale'
+        : summary.status === 'operational'
+          ? 'All systems operational'
+          : summary.status === 'degraded'
+            ? 'Some systems require attention'
+            : 'Checking current status'
+  const signalStatus = loadState === 'error' || isStale ? 'unknown' : summary.status
+  const statusSummary =
     loadState === 'error'
       ? 'Retrying automatically'
-      : summary.totalCount > 0
-        ? `${summary.upCount}/${summary.totalCount} services healthy`
-        : 'No services reported yet'
-  const freshness = getSnapshotFreshness(summary.checkedAt, clockNow, summary.staleAfterMinutes)
+      : isStale
+        ? 'Awaiting fresh check results'
+        : summary.totalCount > 0
+          ? `${summary.upCount}/${summary.totalCount} services healthy`
+          : 'No services reported yet'
   const lastUpdated = summary.checkedAt
     ? `Last updated ${formatCheckedAt(summary.checkedAt)}`
     : 'Last updated: awaiting first successful check'
   const freshnessLabel =
-    freshness.state === 'stale'
+    isStale
       ? `Data is stale by ${formatDuration(freshness.staleByMs)}`
       : freshness.state === 'fresh' && freshness.ageMs !== null
         ? `Updated ${formatDuration(freshness.ageMs)} ago`
@@ -86,7 +91,7 @@ export function HeroStatus({ product, summary, loadState = 'ready', now, onRetry
         {loadState === 'error' ? 'The latest check results could not be retrieved.' : product.description}
       </p>
       <p className="hero-status__meta">
-        {lastUpdated} · {freshnessLabel} · {healthySummary}
+        {lastUpdated} · {freshnessLabel} · {statusSummary}
       </p>
       {showRefresh ? (
         <button className="status-retry" onClick={onRetry} type="button">

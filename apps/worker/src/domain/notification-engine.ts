@@ -164,7 +164,7 @@ export function prepareNotificationDispatches(
   const nextAttemptAt = new Date(Date.parse(input.occurredAt)).toISOString()
   const payload: NotificationPayload = {
     event: dispatches[0].event,
-    incidentId: input.incidentId,
+    incidentId: input.mutation.action === 'open' ? '' : input.incidentId,
     serviceId: input.serviceId,
     serviceName: input.serviceName ?? input.serviceId,
     reason: input.mutation.latestReason,
@@ -172,28 +172,55 @@ export function prepareNotificationDispatches(
     status,
   }
 
-  return dispatches.map((dispatch) =>
-    database
-      .prepare(
-        `
-          INSERT INTO notification_outbox (
-            id, provider_id, event, incident_id, service_id, payload_json,
-            status, attempts, next_attempt_at, last_error, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, ?)
-          ON CONFLICT DO NOTHING
-        `
-      )
-      .bind(
-        crypto.randomUUID(),
-        dispatch.providerId,
-        dispatch.event,
-        input.incidentId,
-        input.serviceId,
-        JSON.stringify({ ...payload, event: dispatch.event }),
-        nextAttemptAt,
-        input.occurredAt
-      )
-  )
+  return dispatches.map((dispatch) => {
+    const statement =
+      input.mutation.action === 'open'
+        ? database.prepare(
+            `
+              INSERT INTO notification_outbox (
+                id, provider_id, event, incident_id, service_id, payload_json,
+                status, attempts, next_attempt_at, last_error, created_at
+              )
+              SELECT ?, ?, ?, incidents.id, ?, json_set(json(?), '$.incidentId', incidents.id),
+                     'pending', 0, ?, NULL, ?
+              FROM incidents
+              WHERE incidents.service_id = ? AND incidents.status = 'open'
+              ON CONFLICT DO NOTHING
+            `
+          )
+            .bind(
+              crypto.randomUUID(),
+              dispatch.providerId,
+              dispatch.event,
+              input.serviceId,
+              JSON.stringify({ ...payload, event: dispatch.event }),
+              nextAttemptAt,
+              input.occurredAt,
+              input.serviceId
+            )
+        : database
+            .prepare(
+              `
+                INSERT INTO notification_outbox (
+                  id, provider_id, event, incident_id, service_id, payload_json,
+                  status, attempts, next_attempt_at, last_error, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, ?)
+                ON CONFLICT DO NOTHING
+              `
+            )
+            .bind(
+              crypto.randomUUID(),
+              dispatch.providerId,
+              dispatch.event,
+              input.incidentId,
+              input.serviceId,
+              JSON.stringify({ ...payload, event: dispatch.event }),
+              nextAttemptAt,
+              input.occurredAt
+            )
+
+    return statement
+  })
 }
 
 export async function enqueueNotificationDispatches(
