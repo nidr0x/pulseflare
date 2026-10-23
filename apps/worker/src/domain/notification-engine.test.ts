@@ -3,7 +3,11 @@ import type { StatusConfig } from '@pulseflare/schema'
 
 import { dispatchPendingNotifications, enqueueNotificationDispatches } from './notification-engine'
 
-function createFakeDatabase(rows: Array<Record<string, unknown>>, claimChanges = 1) {
+function createFakeDatabase(
+  rows: Array<Record<string, unknown>>,
+  claimChanges = 1,
+  openIncidentId = 'incident-1'
+) {
   const runs: unknown[][] = []
   const outbox: unknown[][] = []
   const database = {
@@ -22,11 +26,18 @@ function createFakeDatabase(rows: Array<Record<string, unknown>>, claimChanges =
               runs.push(args)
 
               if (query.includes('INSERT INTO notification_outbox')) {
-                const deliveryKey = args.slice(1, 4).join('|')
-                const duplicate = outbox.some((row) => row.slice(1, 4).join('|') === deliveryKey)
+                const insertForOpenIncident = query.includes('SELECT')
+                const [id, providerId, event] = args as [string, string, string]
+                const incidentId = insertForOpenIncident ? openIncidentId : (args[3] as string)
+                const serviceId = args[insertForOpenIncident ? 3 : 4] as string
+                const payloadJson = insertForOpenIncident
+                  ? JSON.stringify({ ...(JSON.parse(args[4] as string) as Record<string, unknown>), incidentId })
+                  : (args[5] as string)
+                const deliveryKey = [incidentId, providerId, event].join('|')
+                const duplicate = outbox.some((row) => [row[3], row[1], row[2]].join('|') === deliveryKey)
 
                 if (!duplicate || !query.includes('ON CONFLICT DO NOTHING')) {
-                  outbox.push(args)
+                  outbox.push([id, providerId, event, incidentId, serviceId, payloadJson])
                 }
               }
 
@@ -75,12 +86,26 @@ describe('notification engine', () => {
       expect.any(String),
       'ops',
       'incident_opened',
-      'incident-1',
       'api',
       expect.stringContaining('API failed'),
       '2026-04-25T08:00:00.000Z',
       '2026-04-25T08:00:00.000Z',
+      'api',
     ])
+  })
+
+  it('uses the persisted incident ID in both outbox columns and payload', async () => {
+    const { database, outbox } = createFakeDatabase([], 1, 'persisted-incident')
+
+    await enqueueNotificationDispatches(database, config, {
+      mutation: { action: 'open', status: 'open', latestReason: 'API failed' },
+      incidentId: 'candidate-incident',
+      serviceId: 'api',
+      occurredAt: '2026-04-25T08:00:00.000Z',
+    })
+
+    expect(outbox[0]?.[3]).toBe('persisted-incident')
+    expect(JSON.parse(String(outbox[0]?.[5])).incidentId).toBe('persisted-incident')
   })
 
   it('does not enqueue the same incident delivery twice', async () => {

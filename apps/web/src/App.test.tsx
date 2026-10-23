@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import App, { resolveRoutePath } from './App'
@@ -14,8 +14,11 @@ import {
   mergeSummaryIntoSnapshot,
   PUBLIC_REFRESH_INTERVAL_MS,
 } from './lib/api'
+import { scheduleUtcDayChange } from './lib/utc-day'
 import { HomePage } from './routes/HomePage'
 import { IncidentsPage } from './routes/IncidentsPage'
+
+afterEach(() => vi.useRealTimers())
 
 describe('App', () => {
   it('keeps public polling at a free-tier-safe interval', () => {
@@ -83,6 +86,7 @@ describe('App', () => {
               uptimePercentage: 99.5,
               latencyMs: 38,
               history: ['up'],
+              historyDays: [new Date().toISOString().slice(0, 10)],
               notes: 'Last checked now',
               locations: [
                 { label: 'iad', uptimePercentage: 100, history: ['up'], latencyMs: 28 },
@@ -94,11 +98,87 @@ describe('App', () => {
       />
     )
 
-    expect(html).toContain('Regional health')
+    expect(html).toContain('Regional checks today (UTC)')
+    expect(html).toContain('role="group"')
+    expect(html).toContain('aria-label="API Regional checks today (UTC)"')
+    expect(html).toContain('Regional colors summarize checks for the labeled UTC day; uptime covers the displayed history.')
     expect(html).toContain('iad')
     expect(html).toContain('fra')
+    expect(html).toContain('100.00%')
+    expect(html).toContain('99.00%')
+    expect(html).toContain('service-location--up')
+    expect(html).toContain('service-location--degraded')
     expect(html).toContain('38 ms median')
     expect(html).toContain('48 ms')
+  })
+
+  it('labels retained regional history with its UTC date and current-day history as today', () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const previousDay = new Date(Date.parse(`${today}T00:00:00.000Z`) - 24 * 60 * 60_000)
+      .toISOString()
+      .slice(0, 10)
+    const previousDayLabel = new Intl.DateTimeFormat('en-GB', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      timeZone: 'UTC',
+    }).format(new Date(`${previousDay}T12:00:00Z`))
+    const html = renderToStaticMarkup(
+      <HomePage
+        snapshot={{
+          ...EMPTY_STATUS_SNAPSHOT,
+          services: [
+            {
+              id: 'api-yesterday',
+              name: 'API yesterday',
+              group: null,
+              status: 'unknown',
+              uptimePercentage: null,
+              latencyMs: null,
+              history: ['unknown'],
+              historyDays: [previousDay],
+              locations: [{ label: 'iad', uptimePercentage: 100, history: ['up'], latencyMs: 28 }],
+              notes: '',
+            },
+            {
+              id: 'api-today',
+              name: 'API today',
+              group: null,
+              status: 'unknown',
+              uptimePercentage: null,
+              latencyMs: null,
+              history: ['unknown'],
+              historyDays: [today],
+              locations: [{ label: 'iad', uptimePercentage: 100, history: ['up'], latencyMs: 28 }],
+              notes: '',
+            },
+          ],
+        }}
+      />
+    )
+
+    expect(html).toContain(`Regional checks ${previousDayLabel} (UTC)`)
+    expect(html).toContain('Regional checks today (UTC)')
+    expect(html).toContain(`aria-label="API yesterday Regional checks ${previousDayLabel} (UTC)"`)
+    expect(html).toContain('aria-label="API today Regional checks today (UTC)"')
+  })
+
+  it('updates the regional UTC day at midnight and clears its next one-shot timer', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-25T23:59:59.000Z'))
+    const changedDays: string[] = []
+    const cleanup = scheduleUtcDayChange((day) => changedDays.push(day))
+
+    expect(vi.getTimerCount()).toBe(1)
+    vi.advanceTimersByTime(999)
+    expect(changedDays).toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(changedDays).toEqual(['2026-04-26'])
+    expect(vi.getTimerCount()).toBe(1)
+
+    cleanup()
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('renders generated incident state as open until it resolves', () => {
@@ -341,6 +421,73 @@ describe('App', () => {
     )
 
     expect(html).toContain('Last updated an unknown time')
+  })
+
+  it('does not report operational when an operational snapshot is stale', () => {
+    const html = renderToStaticMarkup(
+      <HeroStatus
+        now={Date.parse('2026-04-25T08:10:00.000Z')}
+        product={{ name: 'Acme', description: 'System health' }}
+        summary={{
+          ...EMPTY_STATUS_SNAPSHOT.summary,
+          status: 'operational',
+          checkedAt: '2026-04-25T08:01:00.000Z',
+          upCount: 3,
+          totalCount: 3,
+          staleAfterMinutes: 5,
+        }}
+      />
+    )
+
+    expect(html).toContain('<h1>Status data is stale</h1>')
+    expect(html).toContain('Awaiting fresh check results')
+    expect(html).not.toContain('All systems operational')
+    expect(html).not.toContain('hero-status__signal--operational')
+    expect(html).not.toContain('3/3 services healthy')
+  })
+
+  it('keeps a fresh operational snapshot green', () => {
+    const html = renderToStaticMarkup(
+      <HeroStatus
+        now={Date.parse('2026-04-25T08:02:00.000Z')}
+        product={{ name: 'Acme', description: 'System health' }}
+        summary={{
+          ...EMPTY_STATUS_SNAPSHOT.summary,
+          status: 'operational',
+          checkedAt: '2026-04-25T08:01:00.000Z',
+          upCount: 3,
+          totalCount: 3,
+          staleAfterMinutes: 5,
+        }}
+      />
+    )
+
+    expect(html).toContain('<h1>All systems operational</h1>')
+    expect(html).toContain('hero-status__signal--operational')
+    expect(html).toContain('3/3 services healthy')
+  })
+
+  it('keeps the error presentation when snapshot retrieval fails', () => {
+    const html = renderToStaticMarkup(
+      <HeroStatus
+        loadState="error"
+        product={{ name: 'Acme', description: 'System health' }}
+        summary={{
+          ...EMPTY_STATUS_SNAPSHOT.summary,
+          status: 'operational',
+          checkedAt: '2026-04-25T08:01:00.000Z',
+          upCount: 3,
+          totalCount: 3,
+          staleAfterMinutes: 5,
+        }}
+      />
+    )
+
+    expect(html).toContain('<h1>Live status unavailable</h1>')
+    expect(html).toContain('hero-status__signal--unknown')
+    expect(html).toContain('The latest check results could not be retrieved.')
+    expect(html).toContain('Retrying automatically')
+    expect(html).not.toContain('hero-status__signal--operational')
   })
 
   it('returns a readable fallback for an unknown duration', () => {

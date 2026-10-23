@@ -784,15 +784,28 @@ export async function runScheduledChecks(
         mutation.action === 'open' && isServiceUnderActiveMaintenance(config, service.id, checkedAt)
 
       if (mutation.action === 'open') {
+        const incidentId = crypto.randomUUID()
         statements.push(
           prepareOpenIncident(database, {
-            id: crypto.randomUUID(),
+            id: incidentId,
             serviceId: service.id,
             impact: service.impact,
             latestReason: mutation.latestReason,
             openedAt: checkedAt,
           })
         )
+
+        if (!suppressOpenNotification) {
+          statements.push(
+            ...prepareNotificationDispatches(database, config, {
+              mutation,
+              incidentId,
+              serviceId: service.id,
+              serviceName: service.name,
+              occurredAt: checkedAt,
+            })
+          )
+        }
       }
 
       if (mutation.action === 'resolve') {
@@ -845,17 +858,6 @@ export async function runScheduledChecks(
           },
           logger
         )
-
-        const notificationStatements = prepareNotificationDispatches(database, config, {
-          mutation,
-          incidentId: persistedIncident.id,
-          serviceId: service.id,
-          serviceName: service.name,
-          occurredAt: checkedAt,
-        })
-        if (notificationStatements.length > 0) {
-          await database.batch(notificationStatements)
-        }
       }
     }
 
@@ -881,7 +883,7 @@ export async function runScheduledChecks(
       downCount,
     }
     await leaseGuard.ensure()
-    await finishSchedulerRun(database, runId, checkedAt, summary)
+    await finishSchedulerRun(database, runId, new Date().toISOString(), summary)
     emitObservabilityEvent('info', 'scheduler.run.completed', { runId, ...summary }, logger)
     return summary
   } catch (error) {
