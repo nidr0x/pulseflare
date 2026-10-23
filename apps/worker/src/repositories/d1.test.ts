@@ -1,11 +1,46 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  getLatestCompletedSchedulerRun,
   getPublicServiceHistory,
   listPublicServiceStatuses,
   readMaterializedSnapshotServices,
   writeMaterializedSnapshotServices,
 } from './d1'
+
+describe('getLatestCompletedSchedulerRun', () => {
+  it('reads the latest run by completion time and only considers completed statuses', async () => {
+    let query = ''
+    const database = {
+      prepare(statement: string) {
+        query = statement
+        return {
+          async first() {
+            return {
+              id: 'run-1',
+              started_at: '2026-04-25T08:00:00.000Z',
+              finished_at: '2026-04-25T08:01:00.000Z',
+              status: 'succeeded',
+              services_checked: 1,
+              up_count: 1,
+              down_count: 0,
+              error_message: null,
+            }
+          },
+        }
+      },
+    } as unknown as D1Database
+
+    await expect(getLatestCompletedSchedulerRun(database)).resolves.toMatchObject({
+      id: 'run-1',
+      status: 'succeeded',
+      startedAt: '2026-04-25T08:00:00.000Z',
+      finishedAt: '2026-04-25T08:01:00.000Z',
+    })
+    expect(query).toContain("WHERE status IN ('succeeded', 'failed')")
+    expect(query).toContain('ORDER BY finished_at DESC')
+  })
+})
 
 describe('listPublicServiceStatuses', () => {
   it('preserves missing status rows instead of treating them as healthy', async () => {

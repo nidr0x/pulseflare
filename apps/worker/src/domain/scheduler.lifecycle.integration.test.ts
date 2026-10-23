@@ -10,13 +10,17 @@ const silentLogger = { info() {}, warn() {}, error() {} } as unknown as Observab
 const downProbe = async () => new Response('down', { status: 503 })
 const upProbe = async () => new Response('ok')
 
-function createEnv(database: D1Database, services: StatusConfig['services']) {
+function createEnv(
+  database: D1Database,
+  services: StatusConfig['services'],
+  providers: StatusConfig['notifications']['providers'] = []
+) {
   return {
     PULSEFLARE_D1: database,
     STATUS_CONFIG: {
       site: { name: 'Pulseflare' },
       services,
-      notifications: { providers: [] },
+      notifications: { providers },
       maintenances: [],
     },
   } as never
@@ -77,6 +81,43 @@ describe('scheduler lifecycle (real migrations)', () => {
     })
   })
 
+  it('records the actual completion time while check results and snapshots keep checkedAt', async () => {
+    vi.useFakeTimers()
+    try {
+      const { database, raw } = createMigrationBackedD1Database()
+      const checkedAt = new Date(base).toISOString()
+      const finishedAt = new Date(base + 10_000).toISOString()
+      vi.setSystemTime(new Date(checkedAt))
+
+      await runScheduledChecks(
+        createEnv(database, [apiService()]),
+        async () => {
+          vi.setSystemTime(new Date(finishedAt))
+          return new Response('down', { status: 503 })
+        },
+        checkedAt,
+        upProbe,
+        silentLogger
+      )
+
+      const run = raw.prepare('SELECT started_at, finished_at FROM scheduler_runs').get() as {
+        started_at: string
+        finished_at: string
+      }
+      expect(run.started_at).toBe(checkedAt)
+      expect(run.finished_at).toBe(finishedAt)
+      expect(Date.parse(run.finished_at)).toBeGreaterThan(Date.parse(run.started_at))
+      expect(raw.prepare('SELECT recorded_at FROM check_results').get()).toMatchObject({
+        recorded_at: checkedAt,
+      })
+      expect(raw.prepare('SELECT updated_at FROM snapshot_state').get()).toMatchObject({
+        updated_at: checkedAt,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('persists daily per-location rollups for each scheduled run', async () => {
     const { database, raw } = createMigrationBackedD1Database()
     const env = createEnv(database, [apiService()])
@@ -117,6 +158,61 @@ describe('scheduler lifecycle (real migrations)', () => {
     }
 
     expect(incidents.count).toBe(1)
+  })
+
+  it('rolls back an opening incident when its outbox insert fails', async () => {
+    const { database, raw } = createMigrationBackedD1Database()
+    raw.exec(`
+      CREATE TRIGGER fail_notification_outbox_insert
+      BEFORE INSERT ON notification_outbox
+      BEGIN
+        SELECT RAISE(ABORT, 'injected outbox failure');
+      END;
+    `)
+
+    const env = createEnv(
+      database,
+      [{ ...apiService(), failureThreshold: 1 }],
+      [{ id: 'ops', type: 'webhook', url: 'https://hooks.example.com/status' }]
+    )
+
+    await expect(
+      runScheduledChecks(env, downProbe, new Date(base).toISOString(), upProbe, silentLogger)
+    ).rejects.toThrow('injected outbox failure')
+
+    expect(raw.prepare('SELECT COUNT(*) AS count FROM incidents').get()).toMatchObject({ count: 0 })
+    expect(raw.prepare('SELECT COUNT(*) AS count FROM notification_outbox').get()).toMatchObject({ count: 0 })
+  })
+
+  it('stores the persisted incident ID in the opening outbox row and payload', async () => {
+    const { database, raw } = createMigrationBackedD1Database()
+    const env = createEnv(
+      database,
+      [{ ...apiService(), failureThreshold: 1 }],
+      [{ id: 'ops', type: 'webhook', url: 'https://hooks.example.com/status' }]
+    )
+
+    await runScheduledChecks(
+      env,
+      downProbe,
+      new Date(base).toISOString(),
+      async () => new Response(null, { status: 202 }),
+      silentLogger
+    )
+
+    const row = raw
+      .prepare(
+        `
+          SELECT incidents.id, notification_outbox.incident_id, notification_outbox.payload_json
+          FROM incidents
+          JOIN notification_outbox ON notification_outbox.service_id = incidents.service_id
+          WHERE incidents.status = 'open' AND notification_outbox.event = 'incident_opened'
+        `
+      )
+      .get() as { id: string; incident_id: string; payload_json: string }
+
+    expect(row.incident_id).toBe(row.id)
+    expect(JSON.parse(row.payload_json).incidentId).toBe(row.id)
   })
 
   it('prunes historical results beyond retention and records the prune time', async () => {

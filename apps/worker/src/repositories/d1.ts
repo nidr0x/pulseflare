@@ -368,13 +368,14 @@ export async function listPublicIncidents(database: D1Database): Promise<PublicI
   }))
 }
 
-export async function getLatestSchedulerRun(database: D1Database): Promise<SchedulerRunRecord | null> {
+export async function getLatestCompletedSchedulerRun(database: D1Database): Promise<SchedulerRunRecord | null> {
   const result = (await database
     .prepare(
       `
         SELECT id, started_at, finished_at, status, services_checked, up_count, down_count, error_message
         FROM scheduler_runs
-        ORDER BY started_at DESC
+        WHERE status IN ('succeeded', 'failed')
+        ORDER BY finished_at DESC
         LIMIT 1
       `
     )
@@ -384,7 +385,7 @@ export async function getLatestSchedulerRun(database: D1Database): Promise<Sched
     return null
   }
 
-  if (result.status !== 'running' && result.status !== 'succeeded' && result.status !== 'failed') {
+  if (result.status !== 'succeeded' && result.status !== 'failed') {
     throw new Error(`Unexpected scheduler run status value: ${result.status}`)
   }
 
