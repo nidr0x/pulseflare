@@ -134,14 +134,23 @@ function createFakeDatabase(initial?: {
             },
             async run() {
               if (query.includes('INSERT INTO notification_outbox')) {
-                const [id, providerId, event, incidentId, serviceId, payloadJson] = args as [
-                  string,
-                  string,
-                  string,
-                  string,
-                  string,
-                  string,
-                ]
+                const [id, providerId, event] = args as [string, string, string]
+                const insertForOpenIncident = query.includes('SELECT')
+                const incidentId = insertForOpenIncident
+                  ? state.incidents.find(
+                      (row) =>
+                        row.service_id === args[args.length - 1] &&
+                        row.status === 'open'
+                    )?.id
+                  : (args[3] as string)
+
+                if (!incidentId) return
+
+                const serviceId = args[insertForOpenIncident ? 3 : 4] as string
+                const payloadJson = insertForOpenIncident
+                  ? JSON.stringify({ ...(JSON.parse(args[4] as string) as Record<string, unknown>), incidentId })
+                  : (args[5] as string)
+
                 if (!state.notifications.some((row) => row.incident_id === incidentId && row.provider_id === providerId && row.event === event)) {
                   state.notifications.push({
                     id,
@@ -644,16 +653,22 @@ describe('runScheduledChecks', () => {
               checks: [{ type: 'http', url: 'https://api.example.com/health' }],
             },
           ],
-          notifications: { providers: [] },
+          notifications: {
+            providers: [{ id: 'ops', type: 'webhook', url: 'https://hooks.example.com/status' }],
+          },
           maintenances: [],
         },
       },
       async () => new Response('down', { status: 503 }),
-      '2026-04-25T08:02:00.000Z'
+      '2026-04-25T08:02:00.000Z',
+      async () => new Response(null, { status: 202 })
     )
 
     expect(state.incidents).toHaveLength(1)
     expect(state.incidents[0]?.id).toBe('existing-incident')
+    expect(state.notifications).toHaveLength(1)
+    expect(state.notifications[0]?.incident_id).toBe('existing-incident')
+    expect(JSON.parse(String(state.notifications[0]?.payload_json)).incidentId).toBe('existing-incident')
   })
 
   it('waits for consecutive failures and recoveries before changing incident state', async () => {

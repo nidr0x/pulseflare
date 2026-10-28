@@ -6,7 +6,7 @@ import {
   getPublicServiceHistory,
   listPublicIncidents,
   listPublicServiceStatuses,
-  getLatestSchedulerRun,
+  getLatestCompletedSchedulerRun,
   readMaterializedSnapshotServices,
   type PublicServiceHistoryRecord,
   type PublicServiceStatusRecord,
@@ -326,11 +326,45 @@ function resolveMaterializedServices(
 function isMaterializedSnapshotFresh(updatedAt: string, now: Date): boolean {
   const updatedAtMs = Date.parse(updatedAt)
   const ageMs = now.getTime() - updatedAtMs
-  return Number.isFinite(updatedAtMs) && ageMs >= 0 && ageMs <= MATERIALIZED_SNAPSHOT_MAX_AGE_MS
+  return (
+    Number.isFinite(updatedAtMs) &&
+    Number.isFinite(now.getTime()) &&
+    ageMs >= 0 &&
+    ageMs <= MATERIALIZED_SNAPSHOT_MAX_AGE_MS &&
+    new Date(updatedAtMs).toISOString().slice(0, 10) === now.toISOString().slice(0, 10)
+  )
+}
+
+async function resolveFreshMaterializedServices(
+  database: D1Database,
+  config: StatusConfig,
+  now: Date,
+  statuses?: Map<string, PublicServiceStatusRecord>
+) {
+  const materialized = await readMaterializedSnapshotServices(database)
+  if (!materialized || !isMaterializedSnapshotFresh(materialized.updatedAt, now)) return null
+
+  const currentStatuses =
+    statuses ??
+    new Map((await listPublicServiceStatuses(database)).map((record) => [record.id, record] as const))
+
+  return resolveMaterializedServices(
+    materialized.services,
+    config,
+    currentStatuses,
+    materialized.updatedAt,
+    now
+  )
 }
 
 export async function handlePublicServices(env: unknown, now = new Date()): Promise<Response> {
-  return publicJson({ services: await buildServicesPayload(env, now) })
+  const config = getRuntimeConfig(env)
+  const database = getWorkerDatabase(env)
+  const resolved = database
+    ? await resolveFreshMaterializedServices(database, config, now)
+    : null
+
+  return publicJson({ services: resolved?.services ?? (await buildServicesPayload(env, now)) })
 }
 
 function buildIncidentPayload(incidents: Awaited<ReturnType<typeof listPublicIncidents>>) {
@@ -435,23 +469,17 @@ export async function handlePublicSnapshot(env: unknown, now = new Date()): Prom
   // Prefer the scheduler-materialized services payload: it avoids rescanning
   // 90 days of rollups on every cold cache miss. The read happens before any
   // history query so a fresh row skips the heavy scan entirely.
-  const materialized = database ? await readMaterializedSnapshotServices(database) : null
-  const materializedFresh =
-    materialized !== null && isMaterializedSnapshotFresh(materialized.updatedAt, now)
-
   let services: unknown[]
   let summaryStatuses = statuses
 
-  if (database && materializedFresh) {
-    const resolved = resolveMaterializedServices(
-      materialized!.services,
-      config,
-      statuses,
-      materialized!.updatedAt,
-      now
-    )
-    services = resolved?.services ?? (await buildRuntimeServicesPayload(config, database, now))
-    summaryStatuses = resolved?.statuses ?? statuses
+  const resolved = database
+    ? await resolveFreshMaterializedServices(database, config, now, statuses)
+    : null
+  if (resolved) {
+    services = resolved.services
+    summaryStatuses = resolved.statuses
+  } else if (database) {
+    services = await buildRuntimeServicesPayload(config, database, now)
   } else {
     services = await buildServicesPayload(env, now)
   }
@@ -477,7 +505,7 @@ export async function handleHealth(env: unknown, now = new Date()): Promise<Resp
     return Response.json({ status: 'unknown', lastRun: null }, { status: 503, headers })
   }
 
-  const lastRun = await getLatestSchedulerRun(database)
+  const lastRun = await getLatestCompletedSchedulerRun(database)
   const staleAfterMinutes = getRuntimeConfig(env).staleAfterMinutes ?? DEFAULT_STALE_AFTER_MINUTES
   const healthy =
     lastRun?.status === 'succeeded' &&

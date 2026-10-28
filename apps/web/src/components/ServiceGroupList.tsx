@@ -1,6 +1,7 @@
-import { memo } from 'react'
+import { memo, useEffect, useState } from 'react'
 
 import type { ServiceRecord, SnapshotLoadState, UptimeWindowState } from '../lib/api'
+import { scheduleUtcDayChange } from '../lib/utc-day'
 
 type ServiceGroupListProps = {
   services: ServiceRecord[]
@@ -80,6 +81,13 @@ function formatHistoryDate(value: string): string {
   }).format(new Date(`${value}T12:00:00Z`))
 }
 
+function formatRegionalChecksLabel(day: string | undefined, today: string): string {
+  if (!day) return 'Regional checks (UTC)'
+  return day === today
+    ? 'Regional checks today (UTC)'
+    : `Regional checks ${formatHistoryDate(day)} (UTC)`
+}
+
 function formatShortDate(value: string | undefined): string {
   if (!value) return 'Unknown date'
   return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(
@@ -101,6 +109,10 @@ export const ServiceGroupList = memo(function ServiceGroupList({
   services,
   loadState = 'ready',
 }: ServiceGroupListProps) {
+  const [todayUtc, setTodayUtc] = useState(() => new Date().toISOString().slice(0, 10))
+
+  useEffect(() => scheduleUtcDayChange(setTodayUtc), [])
+
   const groups = Array.from(
     services.reduce((map, service) => {
       const key = service.group ?? 'Other'
@@ -121,7 +133,10 @@ export const ServiceGroupList = memo(function ServiceGroupList({
           <p className="eyebrow">Live status</p>
           <h2>Uptime over the last 90 days</h2>
         </div>
-        <p>Each row shows current state, median regional response time, and a compact uptime timeline.</p>
+        <p>
+          Each row shows current state, median regional response time, and a compact uptime timeline.{' '}
+          Regional colors summarize checks for the labeled UTC day; uptime covers the displayed history.
+        </p>
       </div>
 
       <div className="service-groups">
@@ -135,6 +150,7 @@ export const ServiceGroupList = memo(function ServiceGroupList({
             <ul className="service-list service-list--stacked" role="list">
               {groupServices.map((service) => {
                 const locations = service.locations ?? []
+                const regionalChecksLabel = formatRegionalChecksLabel(service.historyDays?.at(-1), todayUtc)
 
                 return (
                   <li className="service-row" key={service.id}>
@@ -210,8 +226,8 @@ export const ServiceGroupList = memo(function ServiceGroupList({
                     })()}
 
                     {locations.length > 0 ? (
-                      <div aria-label={`${service.name} regional health`} className="service-locations">
-                        <span className="service-locations__label">Regional health</span>
+                      <div role="group" aria-label={`${service.name} ${regionalChecksLabel}`} className="service-locations">
+                        <span className="service-locations__label">{regionalChecksLabel}</span>
                         {locations.map((location) => {
                           const latestState = location.history.at(-1) ?? 'unknown'
 

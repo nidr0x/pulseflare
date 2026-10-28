@@ -41,12 +41,19 @@ export function createSqliteD1(database: DatabaseSync): D1Database {
     prepare: (query: string) => toD1Statement(database.prepare(query)),
     batch: async (statements: Array<{ run: () => Promise<unknown> }>) => {
       const results: unknown[] = []
+      database.exec('BEGIN')
 
-      for (const statement of statements) {
-        results.push(await statement.run())
+      try {
+        for (const statement of statements) {
+          results.push(await statement.run())
+        }
+
+        database.exec('COMMIT')
+        return results
+      } catch (error) {
+        database.exec('ROLLBACK')
+        throw error
       }
-
-      return results
     },
     exec: (sql: string) => {
       database.exec(sql)

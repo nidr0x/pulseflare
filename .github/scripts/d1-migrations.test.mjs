@@ -107,6 +107,7 @@ function assertSchemaShape(scenario) {
     'scheduler_runs',
     'service_status',
     'services',
+    'snapshot_state',
   ]
   const tableNames = query(scenario, "SELECT name FROM sqlite_master WHERE type = 'table'")
     .map((row) => row.name)
@@ -122,6 +123,8 @@ function assertSchemaShape(scenario) {
   assert.ok(incidentColumns.includes('impact'))
   const leaseColumns = query(scenario, "PRAGMA table_info('scheduler_lease')").map((row) => row.name)
   assert.ok(leaseColumns.includes('last_pruned_at'))
+  const snapshotStateColumns = query(scenario, "PRAGMA table_info('snapshot_state')").map((row) => row.name)
+  assert.deepEqual(snapshotStateColumns, ['id', 'updated_at', 'payload_json'])
 
   const indexNames = query(scenario, "SELECT name FROM sqlite_master WHERE type = 'index'").map((row) => row.name)
   assert.ok(indexNames.includes('incidents_one_open_per_service_idx'))
@@ -138,6 +141,7 @@ const allMigrations = [
   '0003_concurrency.sql',
   '0004_idempotency.sql',
   '0005_daily_rollups_and_incident_impact.sql',
+  '0006_snapshot_state.sql',
 ]
 
 describe('D1 migrations', () => {
@@ -153,11 +157,12 @@ describe('D1 migrations', () => {
     }
   })
 
-  it('upgrades an existing database and backfills rollups without reapplying old migrations', () => {
+  it('upgrades an existing database, backfills rollups, and remains idempotent', () => {
     const scenario = createScenario()
 
     try {
-      copyMigrations(scenario, allMigrations.slice(0, -1))
+      const rollupMigrationIndex = allMigrations.indexOf('0005_daily_rollups_and_incident_impact.sql')
+      copyMigrations(scenario, allMigrations.slice(0, rollupMigrationIndex))
       applyMigrations(scenario)
 
       execute(scenario, "INSERT INTO services (id, name) VALUES ('api', 'API')")
@@ -180,7 +185,10 @@ describe('D1 migrations', () => {
       const before = query(scenario, "SELECT name FROM sqlite_master WHERE type = 'index'").map((row) => row.name)
       assert.ok(before.includes('incidents_one_open_per_service_idx'))
 
-      copyMigrations(scenario, ['0005_daily_rollups_and_incident_impact.sql'])
+      copyMigrations(scenario, [
+        '0005_daily_rollups_and_incident_impact.sql',
+        '0006_snapshot_state.sql',
+      ])
       applyMigrations(scenario)
 
       assertSchemaShape(scenario)
@@ -189,8 +197,43 @@ describe('D1 migrations', () => {
         [{ service_id: 'api', day: '2026-04-25', location_label: 'region:iad', up_count: 1, down_count: 1, last_latency_ms: 40 }]
       )
       assert.deepEqual(query(scenario, 'SELECT impact FROM incidents WHERE id = \'incident-1\''), [{ impact: 'minor' }])
-      const migrationRows = query(scenario, 'SELECT name FROM d1_migrations ORDER BY name').map((row) => row.name)
-      assert.deepEqual(migrationRows, allMigrations)
+
+      execute(
+        scenario,
+        "INSERT INTO snapshot_state (id, updated_at, payload_json) " +
+          "VALUES (1, '2026-04-25T08:02:00.000Z', '{\"services\":[]}')"
+      )
+      const snapshotState = query(scenario, 'SELECT id, updated_at, payload_json FROM snapshot_state')
+      assert.deepEqual(snapshotState, [
+        { id: 1, updated_at: '2026-04-25T08:02:00.000Z', payload_json: '{"services":[]}' },
+      ])
+
+      const migrationRowsBeforeRepeat = query(scenario, 'SELECT name FROM d1_migrations ORDER BY name').map((row) => row.name)
+      assert.deepEqual(migrationRowsBeforeRepeat, allMigrations)
+      const dataBeforeRepeat = {
+        services: query(scenario, 'SELECT * FROM services'),
+        checkResults: query(scenario, 'SELECT * FROM check_results'),
+        incidents: query(scenario, 'SELECT * FROM incidents'),
+        rollups: query(scenario, 'SELECT * FROM daily_check_rollups'),
+        snapshotState,
+      }
+
+      applyMigrations(scenario)
+
+      assert.deepEqual(
+        query(scenario, 'SELECT name FROM d1_migrations ORDER BY name').map((row) => row.name),
+        migrationRowsBeforeRepeat
+      )
+      assert.deepEqual(
+        {
+          services: query(scenario, 'SELECT * FROM services'),
+          checkResults: query(scenario, 'SELECT * FROM check_results'),
+          incidents: query(scenario, 'SELECT * FROM incidents'),
+          rollups: query(scenario, 'SELECT * FROM daily_check_rollups'),
+          snapshotState: query(scenario, 'SELECT * FROM snapshot_state'),
+        },
+        dataBeforeRepeat
+      )
     } finally {
       rmSync(scenario.root, { recursive: true, force: true })
     }
