@@ -1,17 +1,24 @@
-# Pulseflare
+<h1 align="center">Pulseflare</h1>
 
-Cloudflare-based uptime monitoring with a public status page.
+<p align="center">Uptime monitoring and a public status page, deployed to Cloudflare.</p>
 
-The basic setup is:
+<p align="center">
+  <a href="https://github.com/nidr0x/pulseflare/actions/workflows/deploy.yml"><img src="https://github.com/nidr0x/pulseflare/actions/workflows/deploy.yml/badge.svg?branch=main" alt="GitHub Actions workflow status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/nidr0x/pulseflare" alt="Apache 2.0 license"></a>
+  <a href="README_zh-CN.md">简体中文</a>
+</p>
 
-1. Create a repository from this template.
-2. Add Cloudflare credentials to GitHub.
-3. Edit `config/pulse.config.ts`.
-4. Push to `main`.
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#configuration-example">Configuration</a> ·
+  <a href="#cost">Cost</a> ·
+  <a href="#local-development">Development</a>
+</p>
 
-GitHub Actions handles the Cloudflare deployment. The basic setup does not require Wrangler, Terraform, or manual SQL.
+Pulseflare monitors HTTP and TCP services and publishes their health on a status page. GitHub Actions verifies the project and can deploy the app to your Cloudflare account. Deployment is opt-in; the default setup does not require Wrangler, Terraform, or manual SQL.
 
-## Public page
+## Preview
 
 The public page includes:
 
@@ -26,7 +33,7 @@ The UI lives in `apps/web` and is deployed as static assets on the Worker that s
 
 ![Pulseflare public status page on mobile](docs/screenshots/public-status-page-mobile.png)
 
-## Quickstart
+## Quick start
 
 ### 1. Create a repository
 
@@ -125,7 +132,7 @@ For small installs:
 
 The public page uses Worker static assets. The Worker handles `/api/*` before static asset handling, but it does not run first for every static page request.
 
-## Current scope
+## Features
 
 The repository contains:
 
@@ -149,7 +156,7 @@ The repository contains:
 The bootstrap endpoint accepts `POST /api/install/bootstrap` with an
 `Authorization: Bearer <token>` header. Do not put the token in a URL query
 parameter.
-## Config example
+## Configuration example
 
 ```ts
 import { defineStatusConfig } from '@pulseflare/schema'
