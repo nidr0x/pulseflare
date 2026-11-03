@@ -5,6 +5,17 @@ import { describe, it } from 'node:test'
 const WORKFLOW_PATH = new URL('../workflows/deploy.yml', import.meta.url)
 
 describe('deploy workflow', () => {
+  it('allows enabled deploys from pushes and manual runs on main', () => {
+    const workflow = readFileSync(WORKFLOW_PATH, 'utf8')
+    const deployJob = workflow.slice(workflow.indexOf('  deploy:'))
+    const condition = deployJob.split('\n').find((line) => line.trimStart().startsWith('if:'))
+
+    assert.match(condition, /github\.event_name == 'push'/)
+    assert.match(condition, /github\.event_name == 'workflow_dispatch'/)
+    assert.match(condition, /github\.ref == 'refs\/heads\/main'/)
+    assert.match(condition, /vars\.PULSEFLARE_ENABLE_DEPLOY == 'true'/)
+  })
+
   it('queues overlapping deploys with a ref-scoped concurrency group', () => {
     const workflow = readFileSync(WORKFLOW_PATH, 'utf8')
     const lines = workflow.split('\n')

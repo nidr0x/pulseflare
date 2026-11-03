@@ -162,34 +162,41 @@ export async function runSmokeChecks({
     throw new Error(`Health check did not become ready after ${maxAttempts} attempts: ${lastError.message}`)
   }
 
-  const snapshot = await fetchJson(snapshotUrl, fetcher)
-  assertSnapshotPayload(snapshot)
-
-  const incidents = await fetchJson(incidentsUrl, fetcher)
-  assertIncidentsPayload(incidents)
-
   // Both views derive their service list from the deployed config, but they
   // are served by different routes (and can come from different cache
   // generations right after a deploy). Divergent service lists mean the
-  // deployment is inconsistent.
-  const snapshotServiceIds = serviceIds(snapshot)
-  const incidentsServiceIds = serviceIds(incidents)
+  // deployment may be in transition until their edge caches expire.
+  let lastPublicViewsError
 
-  if (snapshotServiceIds.length !== incidentsServiceIds.length) {
-    throw new Error(
-      `Snapshot and incidents views list different services (${snapshotServiceIds.length} vs ${incidentsServiceIds.length})`
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const snapshot = await fetchJson(snapshotUrl, fetcher)
+    assertSnapshotPayload(snapshot)
+
+    const incidents = await fetchJson(incidentsUrl, fetcher)
+    assertIncidentsPayload(incidents)
+
+    const snapshotServiceIds = serviceIds(snapshot)
+    const incidentsServiceIds = serviceIds(incidents)
+
+    if (JSON.stringify(snapshotServiceIds) === JSON.stringify(incidentsServiceIds)) {
+      return { healthUrl, snapshotUrl, incidentsUrl }
+    }
+
+    const firstDifferentIndex = snapshotServiceIds.findIndex(
+      (serviceId, index) => serviceId !== incidentsServiceIds[index]
     )
-  }
+    lastPublicViewsError = new Error(
+      snapshotServiceIds.length !== incidentsServiceIds.length
+        ? `Snapshot and incidents views list different services (${snapshotServiceIds.length} vs ${incidentsServiceIds.length})`
+        : `Snapshot and incidents views list different services (${snapshotServiceIds[firstDifferentIndex]} vs ${incidentsServiceIds[firstDifferentIndex]})`
+    )
 
-  for (let index = 0; index < snapshotServiceIds.length; index += 1) {
-    if (snapshotServiceIds[index] !== incidentsServiceIds[index]) {
-      throw new Error(
-        `Snapshot and incidents views list different services (${snapshotServiceIds[index]} vs ${incidentsServiceIds[index]})`
-      )
+    if (attempt < maxAttempts) {
+      await sleep(retryDelayMs)
     }
   }
 
-  return { healthUrl, snapshotUrl, incidentsUrl }
+  throw new Error(`Public views did not converge after ${maxAttempts} attempts: ${lastPublicViewsError.message}`)
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

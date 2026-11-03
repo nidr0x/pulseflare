@@ -241,17 +241,27 @@ npm run build
 npm run lint
 ```
 
-To work on the Worker locally:
+To work on the UI with live API data, initialize local D1 once:
+
+```bash
+npx wrangler d1 migrations apply pulseflare_d1 --local --config apps/worker/wrangler.toml
+```
+
+Then run both servers in separate terminals. Vite proxies `/api/*` to the local Worker at `http://127.0.0.1:8787` by default; set `PULSEFLARE_WORKER_URL` when Wrangler uses another port.
+
+Start the Worker:
 
 ```bash
 npm run dev:worker
 ```
 
-To work on the UI locally:
+Then start the UI:
 
 ```bash
 npm run dev:web
 ```
+
+For a different Worker port, set its URL when starting Vite, for example `PULSEFLARE_WORKER_URL=http://127.0.0.1:8788 npm run dev:web`.
 
 ## Contributing
 

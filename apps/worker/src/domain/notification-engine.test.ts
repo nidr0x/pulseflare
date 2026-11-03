@@ -162,6 +162,71 @@ describe('notification engine', () => {
     })
   })
 
+  it('uses the interpolated body template as GET query parameters for outbox delivery', async () => {
+    const getConfig = {
+      ...config,
+      notifications: {
+        ...config.notifications,
+        providers: [
+          {
+            id: 'ops',
+            type: 'webhook' as const,
+            url: 'https://hooks.example.com/status?source=worker',
+            method: 'GET' as const,
+            bodyTemplate: {
+              service: '$SERVICE_NAME',
+              status: '$STATUS',
+              details: { reason: '$REASON', serviceId: '$SERVICE_ID' },
+              checkedAt: '$CHECKED_AT',
+              omitted: null,
+            },
+          },
+        ],
+      },
+    } satisfies StatusConfig
+    const { database } = createFakeDatabase([
+      {
+        id: 'outbox-1',
+        provider_id: 'ops',
+        event: 'incident_opened',
+        incident_id: 'incident-1',
+        service_id: 'api',
+        payload_json: JSON.stringify({
+          event: 'incident_opened',
+          incidentId: 'incident-1',
+          serviceId: 'api',
+          serviceName: 'API',
+          status: 'open',
+          reason: 'API failed',
+          occurredAt: '2026-04-25T08:00:00.000Z',
+        }),
+        attempts: 0,
+      },
+    ])
+    const fetcher = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 204 })
+    )
+
+    await dispatchPendingNotifications(
+      database,
+      getConfig,
+      fetcher,
+      new Date('2026-04-25T08:05:00.000Z')
+    )
+
+    const [url, init] = fetcher.mock.calls[0] ?? []
+    const query = new URL(String(url)).searchParams
+    expect(init?.method).toBe('GET')
+    expect(init?.body).toBeUndefined()
+    expect(query.get('source')).toBe('worker')
+    expect(query.get('service')).toBe('API')
+    expect(query.get('status')).toBe('down')
+    expect(query.get('details')).toBe('{"reason":"API failed","serviceId":"api"}')
+    expect(query.get('checkedAt')).toBe('2026-04-25T08:00:00.000Z')
+    expect(query.has('omitted')).toBe(false)
+    expect(query.has('incidentId')).toBe(false)
+  })
+
   it('schedules a retry when a webhook fails', async () => {
     const { database, runs } = createFakeDatabase([
       {

@@ -4,7 +4,12 @@ export type ObservabilityLevel = keyof ObservabilityLogger
 const MAX_ERROR_LENGTH = 500
 
 export function getObservabilityError(error: unknown): string {
-  const message = error instanceof Error ? error.message : 'Unknown error'
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : 'Unknown error'
   return message.replaceAll(/\s+/g, ' ').slice(0, MAX_ERROR_LENGTH)
 }
 
