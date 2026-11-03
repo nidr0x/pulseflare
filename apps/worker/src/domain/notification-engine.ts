@@ -103,6 +103,25 @@ function buildProviderBody(
   }
 }
 
+function getNotificationPayloadContext(payload: NotificationPayload): NotificationPayloadContext {
+  return {
+    event: payload.event,
+    serviceId: payload.serviceId,
+    serviceName: payload.serviceName ?? payload.serviceId,
+    status: payload.status === 'open' ? 'down' : 'up',
+    reason: payload.reason,
+    checkedAt: payload.occurredAt,
+  }
+}
+
+function appendWebhookQueryParams(url: URL, body: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(body)) {
+    if (value !== undefined && value !== null) {
+      url.searchParams.set(key, typeof value === 'string' ? value : JSON.stringify(value))
+    }
+  }
+}
+
 export async function dispatchNotification(
   provider: StatusNotificationProvider,
   context: NotificationPayloadContext,
@@ -114,11 +133,7 @@ export async function dispatchNotification(
 
   if (method === 'GET') {
     const url = new URL(provider.url)
-    for (const [key, value] of Object.entries(body)) {
-      if (value !== undefined && value !== null) {
-        url.searchParams.set(key, typeof value === 'string' ? value : JSON.stringify(value))
-      }
-    }
+    appendWebhookQueryParams(url, body)
 
     await fetcher(url.toString(), {
       method: 'GET',
@@ -276,16 +291,7 @@ function getWebhookBody(provider: StatusNotificationProvider, payload: Notificat
     return JSON.stringify(payload)
   }
 
-  return JSON.stringify(
-    buildProviderBody(provider, {
-      event: payload.event,
-      serviceId: payload.serviceId,
-      serviceName: payload.serviceName ?? payload.serviceId,
-      status: payload.status === 'open' ? 'down' : 'up',
-      reason: payload.reason,
-      checkedAt: payload.occurredAt,
-    })
-  )
+  return JSON.stringify(buildProviderBody(provider, getNotificationPayloadContext(payload)))
 }
 
 async function deliverNotification(
@@ -316,11 +322,10 @@ async function deliverNotification(
 
   const requestUrl = new URL(provider.url)
   if (method === 'GET') {
-    for (const [key, value] of Object.entries(payload)) {
-      if (value !== null) {
-        requestUrl.searchParams.set(key, String(value))
-      }
-    }
+    appendWebhookQueryParams(
+      requestUrl,
+      buildProviderBody(provider, getNotificationPayloadContext(payload))
+    )
   }
 
   const response = await fetcher(requestUrl.toString(), {

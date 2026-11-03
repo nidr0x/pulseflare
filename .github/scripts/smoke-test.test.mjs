@@ -93,6 +93,49 @@ describe('runSmokeChecks', () => {
     )
   })
 
+  it('retries both public views while their edge caches return different generations', async () => {
+    const calls = []
+    let incidentsAttempt = 0
+
+    await runSmokeChecks({
+      baseUrl: 'https://status.example.com',
+      maxAttempts: 2,
+      retryDelayMs: 0,
+      sleep: async () => {},
+      fetcher: async (input) => {
+        const url = String(input)
+        calls.push(url)
+
+        if (url.endsWith('/api/health')) {
+          return Response.json({ status: 'ok' })
+        }
+
+        if (url.endsWith('/api/public/snapshot')) {
+          return Response.json(SNAPSHOT_PAYLOAD)
+        }
+
+        if (url.endsWith('/api/public/incidents')) {
+          incidentsAttempt += 1
+          return Response.json(
+            incidentsAttempt === 1
+              ? { ...INCIDENTS_PAYLOAD, services: [] }
+              : INCIDENTS_PAYLOAD
+          )
+        }
+
+        return Response.json({ message: 'unreachable' }, { status: 404 })
+      },
+    })
+
+    assert.deepEqual(calls, [
+      'https://status.example.com/api/health',
+      'https://status.example.com/api/public/snapshot',
+      'https://status.example.com/api/public/incidents',
+      'https://status.example.com/api/public/snapshot',
+      'https://status.example.com/api/public/incidents',
+    ])
+  })
+
   it('fails when the incidents view returns an invalid payload', async () => {
     await assert.rejects(
       runSmokeChecks({
