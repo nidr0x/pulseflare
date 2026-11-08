@@ -1,6 +1,31 @@
 # Deployment
 
-Pulseflare deploys through GitHub Actions. The normal setup does not require Wrangler on your machine.
+Pulseflare supports Cloudflare Workers Builds and GitHub Actions. Workers Builds is the recommended path for a new installation; GitHub Actions remains available when you want deployment controlled from a repository workflow.
+
+## Deploy with Cloudflare
+
+Use the [Deploy to Cloudflare button](https://deploy.workers.cloudflare.com/?url=https://github.com/nidr0x/pulseflare) in the README. Cloudflare creates a repository in your GitHub or GitLab account, provisions D1, and configures Workers Builds.
+
+Before adding personal service URLs or other private settings, make sure the generated repository is private. Edit `config/pulse.config.ts` in that repository. Each push to the production branch builds the site, applies pending D1 migrations, and deploys the Worker.
+
+The `npm run deploy` command uses the root `wrangler.toml` for a standard installation. In the private deployment branch, it uses `apps/worker/wrangler.deploy.toml`, which the private repository workflow generates from its private configuration.
+
+## Connect an existing Worker
+
+The Deploy button creates a new Worker. To reuse an existing Worker and D1 database:
+
+1. Open the Worker in Cloudflare and go to **Settings → Builds → Connect**.
+2. Select the private `pulseflare-homelab` repository and set `cloudflare-deploy` as its production branch.
+3. Set the root directory to `/`, the build command to `npm run build`, and the deploy command to `npm run deploy`.
+4. Keep GitHub Actions deployment disabled for this Worker so only Workers Builds deploys it.
+
+The private repository workflow overlays `config/pulse.config.ts` and the private Wrangler settings onto the current public source before publishing `cloudflare-deploy`. Keep the source repository private because that branch contains your instance configuration.
+
+Cloudflare requires the Worker name to match the `name` in the Wrangler configuration. The existing private workflow renders this value from its repository settings.
+
+## Deploy with GitHub Actions
+
+This optional path deploys from the repository workflow. It does not require Wrangler on your machine.
 
 ## One-time setup
 

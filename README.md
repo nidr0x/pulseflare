@@ -16,7 +16,7 @@
   <a href="#local-development">Development</a>
 </p>
 
-Pulseflare monitors HTTP and TCP services and publishes their health on a status page. GitHub Actions verifies the project and can deploy the app to your Cloudflare account. Deployment is opt-in; the default setup does not require Wrangler, Terraform, or manual SQL.
+Pulseflare monitors HTTP and TCP services and publishes their health on a status page. Use the Cloudflare deploy button to create your own repository and deploy the app with Workers Builds. GitHub Actions remains available as an optional deployment path.
 
 ## Preview
 
@@ -34,6 +34,20 @@ The UI lives in `apps/web` and is deployed as static assets on the Worker that s
 ![Pulseflare public status page on mobile](docs/screenshots/public-status-page-mobile.png)
 
 ## Quick start
+
+### Deploy to Cloudflare
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/nidr0x/pulseflare)
+
+The button creates a repository in your GitHub or GitLab account, provisions a D1 database, and configures automatic deployments. Before adding personal service URLs or other private settings, make sure the created repository is private.
+
+Edit [`config/pulse.config.ts`](config/pulse.config.ts) in your new repository, then push to its production branch. Workers Builds runs `npm run build` and `npm run deploy`; the deploy script applies pending D1 migrations and publishes the Worker.
+
+To reuse an existing Worker, connect its private deployment repository in Cloudflare under **Settings → Builds**. The private `pulseflare-homelab` workflow already publishes a `cloudflare-deploy` branch containing the public source and private configuration. See [docs/deployment.md](docs/deployment.md#connect-an-existing-worker).
+
+### Deploy with GitHub Actions
+
+This alternative uses a GitHub Actions API token. Keep `PULSEFLARE_ENABLE_DEPLOY` unset if Cloudflare Workers Builds deploys the same Worker.
 
 ### 1. Create a repository
 
