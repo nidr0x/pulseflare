@@ -1,0 +1,23 @@
+# Cloudflare Deploy button uses this root configuration.
+name = "pulseflare-status"
+main = "apps/worker/src/index.ts"
+compatibility_date = "2026-04-18"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[assets]
+directory = "apps/web/dist"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+not_found_handling = "single-page-application"
+
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "PULSEFLARE_D1"
+database_name = "pulseflare-d1"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "apps/worker/migrations"
