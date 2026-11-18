@@ -70,7 +70,10 @@ The supported provider shape is:
 Webhook requests have a 10-second timeout. The outbox runs at most four
 deliveries at once. It preserves creation order for each provider, incident,
 and service combination; deliveries for unrelated incidents or services can
-run concurrently.
+run concurrently. Delivery is at least once: if a provider processes a request
+but its acknowledgement is lost, the retry can deliver it again. Each request
+includes the stable `X-Pulseflare-Delivery-Id` outbox ID so receivers can
+deduplicate retries. A configured header with that name is preserved.
 
 At the top level, `staleAfterMinutes` sets how long the public page treats the
 latest check as current. `retentionDays` sets how long historical D1 data stays;
@@ -128,7 +131,8 @@ HTTP fields:
 - optional `expect.bodyExcludes`
 - optional `probe`
 
-HTTP checks without `timeoutMs` use a 5-second timeout.
+HTTP checks without `timeoutMs` use a 5-second timeout. Configured timeouts
+must be whole numbers from 1 to 30,000 milliseconds.
 
 ### TCP check
 
@@ -150,7 +154,8 @@ TCP fields:
 - optional `timeoutMs`
 - optional `probe`
 
-TCP checks without `timeoutMs` use a 3-second connection timeout.
+TCP checks without `timeoutMs` use a 3-second connection timeout. Configured
+timeouts must be whole numbers from 1 to 30,000 milliseconds.
 
 ## Probe model
 

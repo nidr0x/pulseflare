@@ -137,6 +137,49 @@ describe('notification engine', () => {
     })
   })
 
+  it('keeps the delivery ID stable across retries and preserves configured values', async () => {
+    const { database } = createFakeDatabase([
+      {
+        id: 'outbox-retry',
+        provider_id: 'ops',
+        event: 'incident_opened',
+        incident_id: 'incident-1',
+        service_id: 'api',
+        payload_json: JSON.stringify({ event: 'incident_opened', incidentId: 'incident-1' }),
+        attempts: 0,
+      },
+    ])
+    const deliveryIds: string[] = []
+    let attempts = 0
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      deliveryIds.push(new Headers(init?.headers).get('X-Pulseflare-Delivery-Id') ?? '')
+      attempts += 1
+      return new Response(null, { status: attempts === 1 ? 503 : 204 })
+    })
+
+    await dispatchPendingNotifications(database, config, fetcher, new Date('2026-04-25T08:05:00.000Z'))
+    await dispatchPendingNotifications(database, config, fetcher, new Date('2026-04-25T08:06:00.000Z'))
+
+    expect(deliveryIds).toEqual(['outbox-retry', 'outbox-retry'])
+
+    const configured = {
+      ...config,
+      notifications: {
+        ...config.notifications,
+        providers: [{ ...config.notifications.providers[0]!, headers: { 'X-Pulseflare-Delivery-Id': 'configured' } }],
+      },
+    } satisfies StatusConfig
+    const configuredIds: string[] = []
+    const configuredFetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      configuredIds.push(new Headers(init?.headers).get('X-Pulseflare-Delivery-Id') ?? '')
+      return new Response(null, { status: 204 })
+    })
+
+    await dispatchPendingNotifications(database, configured, configuredFetcher, new Date('2026-04-25T08:07:00.000Z'))
+
+    expect(configuredIds).toEqual(['configured'])
+  })
+
   it('schedules a retry when a webhook fails', async () => {
     const { database, runs } = createFakeDatabase([
       {

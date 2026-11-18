@@ -121,6 +121,7 @@ function serviceIds(payload) {
 
 export async function runSmokeChecks({
   baseUrl,
+  expectedSha,
   fetcher = globalThis.fetch,
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   retryDelayMs = DEFAULT_RETRY_DELAY_MS,
@@ -135,20 +136,30 @@ export async function runSmokeChecks({
   }
 
   const healthUrl = buildEndpointUrl(baseUrl, '/api/health')
+  const rootUrl = buildEndpointUrl(baseUrl, '/')
   const snapshotUrl = buildEndpointUrl(baseUrl, '/api/public/snapshot')
   const incidentsUrl = buildEndpointUrl(baseUrl, '/api/public/incidents')
+
+  if (typeof expectedSha !== 'string' || expectedSha.length === 0) {
+    throw new Error('expectedSha is required')
+  }
+
   let lastError
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       const health = await fetchJson(healthUrl, fetcher)
 
-      if (isRecord(health) && health.status === 'ok') {
+      if (isRecord(health) && health.status === 'ok' && health.gitSha === expectedSha) {
         lastError = undefined
         break
       }
 
-      lastError = new Error('Health endpoint reported a non-ready status')
+      lastError = new Error(
+        isRecord(health) && health.status === 'ok'
+          ? `Health endpoint reported SHA ${String(health.gitSha)}, expected SHA ${expectedSha}`
+          : 'Health endpoint reported a non-ready status'
+      )
     } catch (error) {
       lastError = error instanceof Error ? error : new Error('Health request failed')
     }
@@ -160,6 +171,33 @@ export async function runSmokeChecks({
 
   if (lastError) {
     throw new Error(`Health check did not become ready after ${maxAttempts} attempts: ${lastError.message}`)
+  }
+
+  const rootResponse = await fetcher(rootUrl, {
+    headers: { accept: 'text/html' },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  })
+  const html = await readResponseBody(rootResponse)
+  if (!rootResponse.ok) throw new Error(`Root page returned HTTP ${rootResponse.status}`)
+  if (!rootResponse.headers.get('content-type')?.toLowerCase().includes('text/html')) {
+    throw new Error('Root page did not return HTML')
+  }
+
+  const scriptTag = html.match(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/i)
+  if (!scriptTag) throw new Error('Root page did not reference a JavaScript asset')
+
+  const assetUrl = new URL(scriptTag[1], rootUrl)
+  if (assetUrl.origin !== new URL(rootUrl).origin || !/\.(?:m?js)(?:$|[?#])/i.test(assetUrl.href)) {
+    throw new Error('Root page referenced an invalid JavaScript asset')
+  }
+
+  const assetResponse = await fetcher(assetUrl, {
+    method: 'HEAD',
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  })
+  if (!assetResponse.ok) throw new Error(`JavaScript asset returned HTTP ${assetResponse.status}`)
+  if (!assetResponse.headers.get('content-type')?.toLowerCase().includes('javascript')) {
+    throw new Error('JavaScript asset returned an invalid content type')
   }
 
   const snapshot = await fetchJson(snapshotUrl, fetcher)
@@ -189,7 +227,7 @@ export async function runSmokeChecks({
     }
   }
 
-  return { healthUrl, snapshotUrl, incidentsUrl }
+  return { healthUrl, rootUrl, assetUrl: assetUrl.toString(), snapshotUrl, incidentsUrl }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -197,6 +235,9 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     throw new Error('Missing required environment variable: PULSEFLARE_HEALTHCHECK_URL')
   }
 
-  await runSmokeChecks({ baseUrl: process.env.PULSEFLARE_HEALTHCHECK_URL })
+  await runSmokeChecks({
+    baseUrl: process.env.PULSEFLARE_HEALTHCHECK_URL,
+    expectedSha: process.env.PULSEFLARE_EXPECTED_SHA,
+  })
   console.log('Live deployment smoke checks passed')
 }

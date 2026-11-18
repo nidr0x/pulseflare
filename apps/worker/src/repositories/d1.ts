@@ -41,6 +41,8 @@ export type SchedulerRunRecord = {
   errorMessage: string | null
 }
 
+export type PublicHistoryQueryMetrics = { durationMs: number; rowsRead?: number }
+
 type D1Row = {
   id: string
   name: string
@@ -60,6 +62,7 @@ type DailyCheckRollupD1Row = {
 
 type D1Result<T> = {
   results?: T[]
+  meta?: { rows_read?: number }
 }
 
 type IncidentD1Row = {
@@ -202,10 +205,12 @@ function mapPublicLocationLabel(value: string): string {
 export async function getPublicServiceHistory(
   database: D1Database,
   now = new Date(),
-  days = 90
+  days = 90,
+  onQueryMetrics?: (metrics: PublicHistoryQueryMetrics) => void
 ): Promise<Map<string, PublicServiceHistoryRecord>> {
   const dayKeys = getHistoryDays(now, days)
   const cutoff = dayKeys[0]
+  const startedAt = performance.now()
   const result = (await database
     .prepare(
       `
@@ -220,6 +225,10 @@ export async function getPublicServiceHistory(
     )
     .bind(cutoff)
     .all()) as D1Result<DailyCheckRollupD1Row>
+  onQueryMetrics?.({
+    durationMs: performance.now() - startedAt,
+    ...(typeof result.meta?.rows_read === 'number' ? { rowsRead: result.meta.rows_read } : {}),
+  })
 
   const grouped = new Map<
     string,
@@ -341,18 +350,47 @@ export async function writeMaterializedSnapshotServices(
 
 export async function listPublicIncidents(database: D1Database): Promise<PublicIncidentRecord[]> {
   const statement = database.prepare(`
+    WITH recent_resolved AS (
+      SELECT
+        incidents.id,
+        incidents.service_id,
+        services.name AS service_name,
+        incidents.status,
+        incidents.impact,
+        incidents.opened_at,
+        incidents.resolved_at
+      FROM incidents
+      JOIN services ON services.id = incidents.service_id
+      WHERE incidents.status = 'resolved'
+      ORDER BY incidents.resolved_at DESC, incidents.id DESC
+      LIMIT 50
+    ), active_open AS (
+      SELECT
+        incidents.id,
+        incidents.service_id,
+        services.name AS service_name,
+        incidents.status,
+        incidents.impact,
+        incidents.opened_at,
+        incidents.resolved_at
+      FROM incidents
+      JOIN services ON services.id = incidents.service_id
+      WHERE incidents.status = 'open' AND services.is_active = 1
+    )
     SELECT
-      incidents.id,
-      incidents.service_id,
-      services.name AS service_name,
-      incidents.status,
-      incidents.impact,
-      incidents.opened_at,
-      incidents.resolved_at
-    FROM incidents
-    JOIN services ON services.id = incidents.service_id
-    ORDER BY opened_at DESC
-    LIMIT 50
+      public_incidents.id,
+      public_incidents.service_id,
+      public_incidents.service_name,
+      public_incidents.status,
+      public_incidents.impact,
+      public_incidents.opened_at,
+      public_incidents.resolved_at
+    FROM (
+      SELECT * FROM active_open
+      UNION ALL
+      SELECT * FROM recent_resolved
+    ) AS public_incidents
+    ORDER BY public_incidents.opened_at DESC, public_incidents.id DESC
   `)
 
   const result = (await statement.all()) as D1Result<IncidentD1Row>
@@ -368,13 +406,14 @@ export async function listPublicIncidents(database: D1Database): Promise<PublicI
   }))
 }
 
-export async function getLatestSchedulerRun(database: D1Database): Promise<SchedulerRunRecord | null> {
+export async function getLatestCompletedSchedulerRun(database: D1Database): Promise<SchedulerRunRecord | null> {
   const result = (await database
     .prepare(
       `
         SELECT id, started_at, finished_at, status, services_checked, up_count, down_count, error_message
         FROM scheduler_runs
-        ORDER BY started_at DESC
+        WHERE status IN ('succeeded', 'failed')
+        ORDER BY finished_at DESC
         LIMIT 1
       `
     )
@@ -384,7 +423,7 @@ export async function getLatestSchedulerRun(database: D1Database): Promise<Sched
     return null
   }
 
-  if (result.status !== 'running' && result.status !== 'succeeded' && result.status !== 'failed') {
+  if (result.status !== 'succeeded' && result.status !== 'failed') {
     throw new Error(`Unexpected scheduler run status value: ${result.status}`)
   }
 

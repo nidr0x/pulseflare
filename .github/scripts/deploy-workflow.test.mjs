@@ -5,6 +5,16 @@ import { describe, it } from 'node:test'
 const WORKFLOW_PATH = new URL('../workflows/deploy.yml', import.meta.url)
 
 describe('deploy workflow', () => {
+  it('validates the checked-in config and gates manual deploys to enabled main refs', () => {
+    const workflow = readFileSync(WORKFLOW_PATH, 'utf8')
+
+    assert.match(workflow, /workflow_dispatch:/)
+    assert.match(workflow, /node --experimental-strip-types \.github\/scripts\/validate-status-config\.mjs/)
+    assert.match(workflow, /if: github\.ref == 'refs\/heads\/main' && vars\.PULSEFLARE_ENABLE_DEPLOY == 'true'/)
+    assert.match(workflow, /PULSEFLARE_GIT_SHA_RENDERED="\$\{\{ github\.sha \}\}"/)
+    assert.match(workflow, /PULSEFLARE_EXPECTED_SHA: \$\{\{ github\.sha \}\}/)
+  })
+
   it('queues overlapping deploys with a ref-scoped concurrency group', () => {
     const workflow = readFileSync(WORKFLOW_PATH, 'utf8')
     const lines = workflow.split('\n')
@@ -25,5 +35,32 @@ describe('deploy workflow', () => {
       lines.every((line) => !line.includes('cancel-in-progress: true')),
       'deploys must queue sequentially instead of cancelling an in-flight deploy'
     )
+  })
+
+  it('builds web assets in the deploy job after installing dependencies', () => {
+    const workflow = readFileSync(WORKFLOW_PATH, 'utf8')
+    const lines = workflow.split('\n')
+    const deployJobIndex = lines.findIndex((line) => line === '  deploy:')
+
+    assert.ok(deployJobIndex >= 0, 'deploy job is required')
+
+    const nextJobIndex = lines.findIndex(
+      (line, index) => index > deployJobIndex && /^  [A-Za-z0-9_-]+:$/.test(line)
+    )
+    const deployJobLines = lines.slice(
+      deployJobIndex + 1,
+      nextJobIndex < 0 ? lines.length : nextJobIndex
+    )
+    const installIndex = deployJobLines.findIndex((line) => line.trim() === 'run: npm ci')
+    const webBuildIndex = deployJobLines.findIndex(
+      (line) => line.trim() === 'run: npm run build --workspace @pulseflare/web'
+    )
+    const workerDeployIndex = deployJobLines.findIndex(
+      (line) => line.trim() === 'run: npx wrangler deploy --config apps/worker/wrangler.deploy.toml'
+    )
+
+    assert.ok(installIndex >= 0, 'deploy job must install dependencies')
+    assert.ok(webBuildIndex > installIndex, 'web assets must build after dependency installation')
+    assert.ok(workerDeployIndex > webBuildIndex, 'web assets must build before deploying the Worker')
   })
 })

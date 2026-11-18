@@ -187,8 +187,13 @@ function assertStatusCheck(value: unknown, serviceId: string, index: number): as
   }
 
   if (value.timeoutMs !== undefined) {
-    if (typeof value.timeoutMs !== 'number' || !Number.isInteger(value.timeoutMs) || value.timeoutMs < 0) {
-      throw new Error(`Invalid service ${serviceId} check ${index} timeoutMs`)
+    if (
+      typeof value.timeoutMs !== 'number' ||
+      !Number.isInteger(value.timeoutMs) ||
+      value.timeoutMs < 1 ||
+      value.timeoutMs > 30_000
+    ) {
+      throw new Error(`Invalid service ${serviceId} check ${index} timeoutMs (must be between 1 and 30000)`)
     }
   }
 

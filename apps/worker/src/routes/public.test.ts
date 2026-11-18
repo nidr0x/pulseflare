@@ -72,6 +72,111 @@ describe('/api/public/summary', () => {
     expect(payload.totalCount).toBe(2)
     expect(payload.checkedAt).toBe('2026-04-18T17:01:00.000Z')
   })
+
+  it('keeps a fresh failure degraded when other services are stale or missing', async () => {
+    vi.setSystemTime(new Date('2026-04-18T17:02:00.000Z'))
+
+    const database = {
+      prepare() {
+        return {
+          async all() {
+            return {
+              results: [
+                {
+                  id: 'api',
+                  name: 'API',
+                  service_group: null,
+                  current_status: 'down',
+                  checked_at: '2026-04-18T17:01:00.000Z',
+                },
+                {
+                  id: 'blog',
+                  name: 'Blog',
+                  service_group: null,
+                  current_status: 'up',
+                  checked_at: '2026-04-18T16:50:00.000Z',
+                },
+              ],
+            }
+          },
+        }
+      },
+    }
+    const response = await worker.fetch(
+      new Request('https://example.com/api/public/summary'),
+      {
+        STATUS_CONFIG: {
+          site: { name: 'Pulseflare' },
+          staleAfterMinutes: 5,
+          services: [
+            { id: 'api', name: 'API', checks: [{ type: 'http', url: 'https://api.example.com' }] },
+            { id: 'blog', name: 'Blog', checks: [{ type: 'http', url: 'https://blog.example.com' }] },
+            { id: 'dashboard', name: 'Dashboard', checks: [{ type: 'http', url: 'https://dashboard.example.com' }] },
+          ],
+          notifications: { providers: [] },
+          maintenances: [],
+        },
+        PULSEFLARE_D1: database,
+      } as never,
+      {} as ExecutionContext
+    )
+    const payload = await response.json() as Record<string, unknown>
+
+    expect(payload).toMatchObject({ status: 'degraded', upCount: 0, downCount: 1, totalCount: 3 })
+    expect(Object.keys(payload).sort()).toEqual([
+      'checkedAt',
+      'downCount',
+      'staleAfterMinutes',
+      'status',
+      'totalCount',
+      'upCount',
+    ])
+  })
+
+  it('keeps the summary unknown when every service lacks a current result', async () => {
+    const database = {
+      prepare() {
+        return {
+          async all() {
+            return {
+              results: [
+                {
+                  id: 'api',
+                  name: 'API',
+                  service_group: null,
+                  current_status: null,
+                  checked_at: null,
+                },
+              ],
+            }
+          },
+        }
+      },
+    }
+    const response = await worker.fetch(
+      new Request('https://example.com/api/public/summary'),
+      {
+        STATUS_CONFIG: {
+          site: { name: 'Pulseflare' },
+          services: [
+            { id: 'api', name: 'API', checks: [{ type: 'http', url: 'https://api.example.com' }] },
+            { id: 'blog', name: 'Blog', checks: [{ type: 'http', url: 'https://blog.example.com' }] },
+          ],
+          notifications: { providers: [] },
+          maintenances: [],
+        },
+        PULSEFLARE_D1: database,
+      } as never,
+      {} as ExecutionContext
+    )
+
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'unknown',
+      upCount: 0,
+      downCount: 0,
+      totalCount: 2,
+    })
+  })
 })
 
 describe('/api/public/snapshot', () => {
@@ -215,6 +320,39 @@ describe('/api/public/services', () => {
     maintenances: [],
   }
 
+  function createSnapshotDatabase(
+    snapshot: { updated_at: string; payload_json: string } | null,
+    statuses: Array<Record<string, unknown>>,
+    rollups: Array<Record<string, unknown>> = []
+  ) {
+    const queries: string[] = []
+    return {
+      queries,
+      prepare(query: string) {
+        queries.push(query)
+        if (query.includes('FROM snapshot_state')) {
+          return { async first() { return snapshot } }
+        }
+        if (query.includes('FROM daily_check_rollups')) {
+          return { bind() { return { async all() { return { results: rollups } } } } }
+        }
+        if (query.includes('FROM incidents')) {
+          return { async all() { return { results: [] } } }
+        }
+        expect(query).toContain('LEFT JOIN service_status')
+        return { async all() { return { results: statuses } } }
+      },
+    }
+  }
+
+  function publicRequest(route: 'services' | 'snapshot', database: unknown, config = statusConfig) {
+    return worker.fetch(
+      new Request(`https://example.com/api/public/${route}`),
+      { STATUS_CONFIG: config, PULSEFLARE_D1: database } as never,
+      {} as ExecutionContext
+    )
+  }
+
   it('returns configured services before the database has runtime state', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/public/services'),
@@ -242,6 +380,10 @@ describe('/api/public/services', () => {
 
     const database = {
       prepare(query: string) {
+        if (query.includes('FROM snapshot_state')) {
+          return { async first() { return null } }
+        }
+
         if (query.includes('FROM daily_check_rollups')) {
           return {
             bind() {
@@ -306,6 +448,217 @@ describe('/api/public/services', () => {
       uptimePercentage: null,
     })
   })
+
+  it('shares a fresh materialized snapshot with snapshot, applying current config and per-service freshness', async () => {
+    vi.setSystemTime(new Date('2026-04-25T08:06:00.000Z'))
+    const config = {
+      ...statusConfig,
+      staleAfterMinutes: 5,
+      services: [
+        { ...statusConfig.services[0], name: 'API v2', group: 'Platform' },
+        statusConfig.services[1],
+      ],
+    }
+    const snapshot = {
+      updated_at: '2026-04-25T08:05:00.000Z',
+      payload_json: JSON.stringify([
+        {
+          id: 'api',
+          name: 'Old API name',
+          group: 'Old group',
+          status: 'operational',
+          uptimePercentage: 99,
+          latencyMs: 42,
+          history: ['up'],
+          historyDays: ['2026-04-25'],
+          locations: [],
+        },
+        {
+          id: 'blog',
+          name: 'Old Blog name',
+          group: 'Old group',
+          status: 'outage',
+          uptimePercentage: 100,
+          latencyMs: 12,
+          history: ['up'],
+          historyDays: ['2026-04-25'],
+          locations: [],
+        },
+        { id: 'retired', name: 'Retired', status: 'outage' },
+      ]),
+    }
+    const statuses = [
+      { id: 'api', name: 'API', service_group: 'Core', current_status: 'down', checked_at: '2026-04-25T08:00:00.000Z' },
+      { id: 'blog', name: 'Blog', service_group: null, current_status: 'up', checked_at: '2026-04-25T08:04:00.000Z' },
+    ]
+    const servicesDatabase = createSnapshotDatabase(snapshot, statuses)
+    const snapshotDatabase = createSnapshotDatabase(snapshot, statuses)
+
+    const servicesResponse = await publicRequest('services', servicesDatabase, config)
+    const snapshotResponse = await publicRequest('snapshot', snapshotDatabase, config)
+    const servicesPayload = await servicesResponse.json() as { services: Array<Record<string, unknown>> }
+    const snapshotPayload = await snapshotResponse.json() as { services: Array<Record<string, unknown>> }
+
+    expect(servicesResponse.status).toBe(200)
+    expect(Object.keys(servicesPayload)).toEqual(['services'])
+    expect(servicesPayload.services).toEqual(snapshotPayload.services)
+    expect(servicesPayload.services).toHaveLength(2)
+    expect(servicesPayload.services[0]).toMatchObject({
+      id: 'api',
+      name: 'API v2',
+      group: 'Platform',
+      status: 'unknown',
+      uptimePercentage: 99,
+      latencyMs: 42,
+      notes: 'Status data is stale; last checked 2026-04-25T08:00:00.000Z',
+    })
+    expect(servicesPayload.services[1]).toMatchObject({
+      id: 'blog',
+      name: 'Blog',
+      group: null,
+      status: 'operational',
+      uptimePercentage: 100,
+    })
+    expect(servicesDatabase.queries.some((query) => query.includes('FROM daily_check_rollups'))).toBe(false)
+    expect(snapshotDatabase.queries.some((query) => query.includes('FROM daily_check_rollups'))).toBe(false)
+  })
+
+  it('falls back to live history when a fresh snapshot belongs to the previous UTC day', async () => {
+    vi.setSystemTime(new Date('2026-04-26T00:01:00.000Z'))
+    const snapshot = {
+      updated_at: '2026-04-25T23:59:00.000Z',
+      payload_json: JSON.stringify([
+        {
+          id: 'api',
+          status: 'outage',
+          uptimePercentage: 0,
+          history: ['down'],
+          historyDays: ['2026-04-25'],
+          locations: [{ label: 'iad', uptimePercentage: 0, history: ['down'], latencyMs: 731 }],
+        },
+        { id: 'blog', status: 'operational', history: ['up'], historyDays: ['2026-04-25'], locations: [] },
+      ]),
+    }
+    const statuses = [
+      { id: 'api', name: 'API', service_group: 'Core', current_status: 'up', checked_at: '2026-04-26T00:00:00.000Z' },
+      { id: 'blog', name: 'Blog', service_group: null, current_status: 'up', checked_at: '2026-04-26T00:00:00.000Z' },
+    ]
+    const rollups = [
+      {
+        service_id: 'api',
+        day: '2026-04-26',
+        up_count: 1,
+        down_count: 0,
+        location_label: 'iad',
+        last_latency_ms: 42,
+      },
+    ]
+    const servicesDatabase = createSnapshotDatabase(snapshot, statuses, rollups)
+    const snapshotDatabase = createSnapshotDatabase(snapshot, statuses, rollups)
+
+    const servicesResponse = await publicRequest('services', servicesDatabase)
+    const snapshotResponse = await publicRequest('snapshot', snapshotDatabase)
+    const servicesPayload = await servicesResponse.json() as { services: Array<Record<string, unknown>> }
+    const snapshotPayload = await snapshotResponse.json() as { services: Array<Record<string, unknown>> }
+
+    expect(servicesPayload.services).toEqual(snapshotPayload.services)
+    expect(servicesPayload.services[0]).toMatchObject({
+      id: 'api',
+      uptimePercentage: 100,
+      history: expect.arrayContaining(['up']),
+      historyDays: expect.arrayContaining(['2026-04-26']),
+      locations: [{ uptimePercentage: 100, history: ['up'], latencyMs: 42 }],
+    })
+    expect(servicesDatabase.queries.some((query) => query.includes('FROM daily_check_rollups'))).toBe(true)
+    expect(snapshotDatabase.queries.some((query) => query.includes('FROM daily_check_rollups'))).toBe(true)
+  })
+
+  it('falls back to live history when a fresh snapshot omits a configured service ID', async () => {
+    vi.setSystemTime(new Date('2026-04-25T08:06:00.000Z'))
+    const snapshot = {
+      updated_at: '2026-04-25T08:05:00.000Z',
+      payload_json: JSON.stringify([{ id: 'api', name: 'API', status: 'operational' }]),
+    }
+    const statuses = [
+      { id: 'api', name: 'API', service_group: 'Core', current_status: 'down', checked_at: '2026-04-25T08:04:00.000Z' },
+      { id: 'blog', name: 'Blog', service_group: null, current_status: 'up', checked_at: '2026-04-25T08:04:00.000Z' },
+    ]
+    const servicesDatabase = createSnapshotDatabase(snapshot, statuses)
+    const snapshotDatabase = createSnapshotDatabase(snapshot, statuses)
+
+    const servicesResponse = await publicRequest('services', servicesDatabase)
+    const snapshotResponse = await publicRequest('snapshot', snapshotDatabase)
+    const servicesPayload = await servicesResponse.json() as { services: Array<Record<string, unknown>> }
+    const snapshotPayload = await snapshotResponse.json() as { services: Array<Record<string, unknown>> }
+
+    expect(servicesPayload.services).toEqual(snapshotPayload.services)
+    expect(servicesPayload.services).toHaveLength(2)
+    expect(servicesPayload.services[0]).toMatchObject({ id: 'api', name: 'API', status: 'outage' })
+    expect(servicesPayload.services[1]).toMatchObject({ id: 'blog', name: 'Blog', status: 'operational' })
+    expect(servicesDatabase.queries.some((query) => query.includes('FROM daily_check_rollups'))).toBe(true)
+    expect(snapshotDatabase.queries.some((query) => query.includes('FROM daily_check_rollups'))).toBe(true)
+  })
+
+  it('falls back to live history when a fresh snapshot contains invalid service history', async () => {
+    vi.setSystemTime(new Date('2026-04-25T08:06:00.000Z'))
+    const snapshot = {
+      updated_at: '2026-04-25T08:05:00.000Z',
+      payload_json: JSON.stringify([
+        {
+          id: 'api',
+          status: 'operational',
+          uptimePercentage: 99,
+          latencyMs: 42,
+          history: ['unknown-state'],
+          historyDays: ['2026-04-25'],
+          locations: [],
+        },
+        {
+          id: 'blog',
+          status: 'operational',
+          uptimePercentage: 100,
+          latencyMs: null,
+          history: ['up'],
+          historyDays: ['2026-04-25'],
+          locations: [],
+        },
+      ]),
+    }
+    const statuses = [
+      { id: 'api', name: 'API', service_group: 'Core', current_status: 'up', checked_at: '2026-04-25T08:04:00.000Z' },
+      { id: 'blog', name: 'Blog', service_group: null, current_status: 'up', checked_at: '2026-04-25T08:04:00.000Z' },
+    ]
+    const database = createSnapshotDatabase(snapshot, statuses)
+
+    const response = await publicRequest('services', database)
+    const payload = await response.json() as { services: Array<Record<string, unknown>> }
+
+    expect(payload.services[0]?.history).not.toEqual(['unknown-state'])
+    expect(database.queries.some((query) => query.includes('FROM daily_check_rollups'))).toBe(true)
+  })
+
+  it.each([
+    ['absent', null],
+    ['stale', { updated_at: '2026-04-25T07:50:00.000Z', payload_json: JSON.stringify([{ id: 'api' }, { id: 'blog' }]) }],
+  ] as const)('falls back to live history when the snapshot is %s', async (_state, snapshot) => {
+    vi.setSystemTime(new Date('2026-04-25T08:06:00.000Z'))
+    const statuses = [
+      { id: 'api', name: 'API', service_group: 'Core', current_status: 'down', checked_at: '2026-04-25T08:04:00.000Z' },
+      { id: 'blog', name: 'Blog', service_group: null, current_status: 'up', checked_at: '2026-04-25T08:04:00.000Z' },
+    ]
+    const servicesDatabase = createSnapshotDatabase(snapshot, statuses)
+    const snapshotDatabase = createSnapshotDatabase(snapshot, statuses)
+
+    const servicesResponse = await publicRequest('services', servicesDatabase)
+    const snapshotResponse = await publicRequest('snapshot', snapshotDatabase)
+    const servicesPayload = await servicesResponse.json() as { services: Array<Record<string, unknown>> }
+    const snapshotPayload = await snapshotResponse.json() as { services: Array<Record<string, unknown>> }
+
+    expect(servicesPayload.services).toEqual(snapshotPayload.services)
+    expect(servicesPayload.services).toHaveLength(2)
+    expect(servicesDatabase.queries.some((query) => query.includes('FROM daily_check_rollups'))).toBe(true)
+    expect(snapshotDatabase.queries.some((query) => query.includes('FROM daily_check_rollups'))).toBe(true)
+  })
 })
 
 describe('/api/public/incidents', () => {
@@ -313,7 +666,9 @@ describe('/api/public/incidents', () => {
     const database = {
       prepare(query: string) {
         expect(query).toContain('FROM incidents')
-        expect(query).toContain('ORDER BY opened_at DESC')
+        expect(query).toContain('WHERE incidents.status = \'open\' AND services.is_active = 1')
+        expect(query).toContain('WHERE incidents.status = \'resolved\'')
+        expect(query).toContain('ORDER BY public_incidents.opened_at DESC, public_incidents.id DESC')
 
         return {
           async all() {
@@ -458,41 +813,130 @@ describe('/api/public/maintenance', () => {
 })
 
 describe('/api/health', () => {
-  it('returns a failing health response when the scheduler has not completed recently', async () => {
-    vi.setSystemTime(new Date('2026-04-25T08:10:00.000Z'))
-
-    const database = {
+  function createDatabase(runs: Array<Record<string, unknown>>) {
+    return {
       prepare(query: string) {
         expect(query).toContain('FROM scheduler_runs')
         return {
           async first() {
-            return {
-              id: 'run-1',
-              started_at: '2026-04-25T08:00:00.000Z',
-              finished_at: '2026-04-25T08:01:00.000Z',
-              status: 'succeeded',
-              services_checked: 1,
-              up_count: 1,
-              down_count: 0,
-              error_message: null,
-            }
+            const completed = query.includes("WHERE status IN ('succeeded', 'failed')")
+              ? runs.filter((run) => run.status === 'succeeded' || run.status === 'failed')
+              : runs
+            const orderBy = query.includes('ORDER BY finished_at DESC') ? 'finished_at' : 'started_at'
+            return (
+              [...completed].sort((left, right) =>
+                String(right[orderBy] ?? '').localeCompare(String(left[orderBy] ?? ''))
+              )[0] ?? null
+            )
           },
         }
       },
     }
+  }
 
-    const response = await worker.fetch(
+  function run(id: string, status: string, startedAt: string, finishedAt: string | null) {
+    return {
+      id,
+      started_at: startedAt,
+      finished_at: finishedAt,
+      status,
+      services_checked: 1,
+      up_count: 1,
+      down_count: 0,
+      error_message: null,
+    }
+  }
+
+  function requestHealth(runs: Array<Record<string, unknown>>, gitSha?: string) {
+    return worker.fetch(
       new Request('https://example.com/api/health'),
       {
-        STATUS_CONFIG: { site: { name: 'Pulseflare' }, services: [], notifications: { providers: [] }, maintenances: [] },
-        PULSEFLARE_D1: database,
+        STATUS_CONFIG: {
+          site: { name: 'Pulseflare' },
+          services: [],
+          staleAfterMinutes: 5,
+          notifications: { providers: [] },
+          maintenances: [],
+        },
+        PULSEFLARE_D1: createDatabase(runs),
+        PULSEFLARE_GIT_SHA: gitSha,
       } as never,
       {} as ExecutionContext
     )
+  }
+
+  it('keeps a recent successful run healthy while a newer run is still running', async () => {
+    vi.setSystemTime(new Date('2026-04-25T08:03:00.000Z'))
+
+    const response = await requestHealth([
+      run('running-2', 'running', '2026-04-25T08:02:00.000Z', null),
+      run('success-1', 'succeeded', '2026-04-25T08:00:00.000Z', '2026-04-25T08:01:00.000Z'),
+    ])
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    await expect(response.json()).resolves.toEqual({
+      status: 'ok',
+      lastRun: {
+        id: 'success-1',
+        status: 'succeeded',
+        startedAt: '2026-04-25T08:00:00.000Z',
+        finishedAt: '2026-04-25T08:01:00.000Z',
+        servicesChecked: 1,
+      },
+    })
+  })
+
+  it('exposes the deployed git SHA without enabling health response caching', async () => {
+    vi.setSystemTime(new Date('2026-04-25T08:03:00.000Z'))
+
+    const response = await requestHealth(
+      [run('success-1', 'succeeded', '2026-04-25T08:00:00.000Z', '2026-04-25T08:01:00.000Z')],
+      'abc123'
+    )
+
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    await expect(response.json()).resolves.toMatchObject({ status: 'ok', gitSha: 'abc123' })
+  })
+
+  it('returns 503 when the latest completed run failed', async () => {
+    vi.setSystemTime(new Date('2026-04-25T08:03:00.000Z'))
+
+    const response = await requestHealth([
+      run('failure-2', 'failed', '2026-04-25T08:01:00.000Z', '2026-04-25T08:02:00.000Z'),
+      run('success-1', 'succeeded', '2026-04-25T08:00:00.000Z', '2026-04-25T08:01:00.000Z'),
+    ])
 
     expect(response.status).toBe(503)
-    expect(response.headers.get('cache-control')).toBe('no-store')
-    await expect(response.json()).resolves.toMatchObject({ status: 'degraded' })
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'degraded',
+      lastRun: { id: 'failure-2', status: 'failed' },
+    })
+  })
+
+  it('returns 503 when the latest successful run is stale', async () => {
+    vi.setSystemTime(new Date('2026-04-25T08:10:00.000Z'))
+
+    const response = await requestHealth([
+      run('success-1', 'succeeded', '2026-04-25T08:00:00.000Z', '2026-04-25T08:01:00.000Z'),
+    ])
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toMatchObject({
+      status: 'degraded',
+      lastRun: { id: 'success-1', status: 'succeeded' },
+    })
+  })
+
+  it('returns 503 and no last run when only an in-progress run exists', async () => {
+    vi.setSystemTime(new Date('2026-04-25T08:03:00.000Z'))
+
+    const response = await requestHealth([
+      run('running-1', 'running', '2026-04-25T08:02:00.000Z', null),
+    ])
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toEqual({ status: 'degraded', lastRun: null })
   })
 })
 
