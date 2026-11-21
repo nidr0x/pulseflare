@@ -1,11 +1,108 @@
+import { DatabaseSync } from 'node:sqlite'
+
 import { describe, expect, it } from 'vitest'
 
 import {
+  getLatestCompletedSchedulerRun,
   getPublicServiceHistory,
+  listPublicIncidents,
   listPublicServiceStatuses,
   readMaterializedSnapshotServices,
   writeMaterializedSnapshotServices,
 } from './d1'
+
+describe('getLatestCompletedSchedulerRun', () => {
+  it('reads the latest run by completion time and only considers completed statuses', async () => {
+    let query = ''
+    const database = {
+      prepare(statement: string) {
+        query = statement
+        return {
+          async first() {
+            return {
+              id: 'run-1',
+              started_at: '2026-04-25T08:00:00.000Z',
+              finished_at: '2026-04-25T08:01:00.000Z',
+              status: 'succeeded',
+              services_checked: 1,
+              up_count: 1,
+              down_count: 0,
+              error_message: null,
+            }
+          },
+        }
+      },
+    } as unknown as D1Database
+
+    await expect(getLatestCompletedSchedulerRun(database)).resolves.toMatchObject({
+      id: 'run-1',
+      status: 'succeeded',
+      startedAt: '2026-04-25T08:00:00.000Z',
+      finishedAt: '2026-04-25T08:01:00.000Z',
+    })
+    expect(query).toContain("WHERE status IN ('succeeded', 'failed')")
+    expect(query).toContain('ORDER BY finished_at DESC')
+  })
+})
+
+describe('listPublicIncidents', () => {
+  it('returns active open incidents and the 50 newest resolutions in deterministic order', async () => {
+    const sqlite = new DatabaseSync(':memory:')
+
+    try {
+      sqlite.exec(`
+        CREATE TABLE services (id TEXT PRIMARY KEY, name TEXT NOT NULL, is_active INTEGER NOT NULL);
+        CREATE TABLE incidents (
+          id TEXT PRIMARY KEY,
+          service_id TEXT NOT NULL,
+          status TEXT NOT NULL,
+          impact TEXT NOT NULL,
+          opened_at TEXT NOT NULL,
+          resolved_at TEXT
+        );
+      `)
+      sqlite.prepare('INSERT INTO services (id, name, is_active) VALUES (?, ?, ?)').run('active', 'Active API', 1)
+      sqlite.prepare('INSERT INTO services (id, name, is_active) VALUES (?, ?, ?)').run('removed', 'Removed API', 0)
+
+      const insertIncident = sqlite.prepare(
+        'INSERT INTO incidents (id, service_id, status, impact, opened_at, resolved_at) VALUES (?, ?, ?, ?, ?, ?)'
+      )
+      insertIncident.run('active-open', 'active', 'open', 'major', '2026-04-17T08:00:00.000Z', null)
+      insertIncident.run('removed-open', 'removed', 'open', 'major', '2027-04-17T08:00:00.000Z', null)
+      for (let index = 1; index <= 51; index += 1) {
+        const id = `resolved-${String(index).padStart(2, '0')}`
+        const serviceId = index % 2 === 0 ? 'removed' : 'active'
+        const resolvedAt = `2026-04-25T08:${String(index).padStart(2, '0')}:00.000Z`
+        insertIncident.run(id, serviceId, 'resolved', 'minor', '2026-04-18T08:00:00.000Z', resolvedAt)
+      }
+
+      const database = {
+        prepare(statement: string) {
+          return {
+            async all() {
+              return { results: sqlite.prepare(statement).all() }
+            },
+          }
+        },
+      } as unknown as D1Database
+      const incidents = await listPublicIncidents(database)
+
+      expect(incidents).toHaveLength(51)
+      expect(incidents.map((incident) => incident.id)).toEqual([
+        ...Array.from({ length: 50 }, (_, index) => `resolved-${String(51 - index).padStart(2, '0')}`),
+        'active-open',
+      ])
+      expect(incidents.map((incident) => incident.id)).not.toContain('removed-open')
+      expect(incidents.find((incident) => incident.id === 'resolved-50')).toMatchObject({
+        serviceId: 'removed',
+        serviceName: 'Removed API',
+        status: 'resolved',
+      })
+    } finally {
+      sqlite.close()
+    }
+  })
+})
 
 describe('listPublicServiceStatuses', () => {
   it('preserves missing status rows instead of treating them as healthy', async () => {
@@ -217,6 +314,31 @@ describe('getPublicServiceHistory', () => {
     expect(record?.locations).toEqual([
       { label: 'iad', uptimePercentage: 50, history: ['down'], latencyMs: 90 },
     ])
+  })
+
+  it('reports rollup query duration and D1 rows read when metadata is available', async () => {
+    const database = {
+      prepare() {
+        return {
+          bind() {
+            return {
+              async all() {
+                return { results: [], meta: { rows_read: 37 } }
+              },
+            }
+          },
+        }
+      },
+    } as unknown as D1Database
+    const metrics: Array<{ durationMs: number; rowsRead?: number }> = []
+
+    await getPublicServiceHistory(database, new Date('2026-04-25T12:00:00.000Z'), 2, (queryMetrics) => {
+      metrics.push(queryMetrics)
+    })
+
+    expect(metrics).toHaveLength(1)
+    expect(metrics[0]?.durationMs).toBeGreaterThanOrEqual(0)
+    expect(metrics[0]?.rowsRead).toBe(37)
   })
 })
 

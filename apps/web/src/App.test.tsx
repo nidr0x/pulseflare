@@ -129,7 +129,7 @@ describe('App', () => {
     const html = renderToStaticMarkup(<IncidentsPage snapshot={EMPTY_STATUS_SNAPSHOT} />)
 
     expect(html).toContain('Incidents &amp; Maintenance')
-    expect(html).toContain('Full incident history')
+    expect(html).toContain('Recent incident history')
   })
 
   it('maps supported and unsupported paths into app routes', () => {
@@ -242,10 +242,13 @@ describe('App', () => {
             {
               id: 'api',
               name: 'API',
+              group: null,
               status: 'outage',
               uptimePercentage: 0,
               latencyMs: 0,
               history: ['down'],
+              historyDays: ['2026-04-19'],
+              locations: [],
               notes: 'Last checked 2026-04-19T08:15:00.000Z',
             },
           ],

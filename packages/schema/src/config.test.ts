@@ -21,6 +21,28 @@ describe('status config', () => {
     expect(parseStatusConfig(config).services).toHaveLength(1)
   })
 
+  it('requires check timeouts to be positive and no greater than 30 seconds', () => {
+    const config = (timeoutMs: number) => ({
+      site: { name: 'Acme Status' },
+      services: [
+        {
+          id: 'api',
+          name: 'API',
+          checks: [{ type: 'http', url: 'https://api.example.com/health', timeoutMs }],
+        },
+      ],
+      notifications: { providers: [] },
+      maintenances: [],
+    })
+
+    expect(parseStatusConfig(config(1)).services[0]?.checks[0]?.timeoutMs).toBe(1)
+    expect(parseStatusConfig(config(30_000)).services[0]?.checks[0]?.timeoutMs).toBe(30_000)
+
+    for (const timeoutMs of [0, -1, 30_001, 1.5]) {
+      expect(() => parseStatusConfig(config(timeoutMs))).toThrow(/timeoutms/i)
+    }
+  })
+
   it('accepts reliability thresholds and retention settings', () => {
     const config = defineStatusConfig({
       site: { name: 'Acme Status' },

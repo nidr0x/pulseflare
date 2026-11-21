@@ -13,7 +13,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "vitest run src/App.test.tsx",
+    "test": "vitest run src/App.test.tsx src/lib/api.test.ts",
     "lint": "tsc -p tsconfig.json --noEmit"
   }
 }

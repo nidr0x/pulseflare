@@ -265,7 +265,8 @@ async function deliverNotification(
   provider: StatusNotificationProvider,
   payload: NotificationPayload,
   fetcher: typeof fetch,
-  secrets: Record<string, string>
+  secrets: Record<string, string>,
+  deliveryId: string
 ): Promise<void> {
   const method = provider.method ?? 'POST'
   const headers = new Headers(provider.headers)
@@ -281,6 +282,10 @@ async function deliverNotification(
       provider.secretHeader ?? 'authorization',
       `${provider.secretPrefix ?? 'Bearer '}${secret}`
     )
+  }
+
+  if (!headers.has('x-pulseflare-delivery-id')) {
+    headers.set('x-pulseflare-delivery-id', deliveryId)
   }
 
   if (method !== 'GET' && !headers.has('content-type')) {
@@ -432,7 +437,13 @@ export async function dispatchPendingNotifications(
     }
 
     try {
-      await deliverNotification(provider, JSON.parse(row.payload_json) as NotificationPayload, fetcher, secrets)
+      await deliverNotification(
+        provider,
+        JSON.parse(row.payload_json) as NotificationPayload,
+        fetcher,
+        secrets,
+        row.id
+      )
       await database
         .prepare(
           `

@@ -96,6 +96,30 @@ describe('scheduler snapshot materialization (real migrations)', () => {
     ).toBeTruthy()
     expect(raw.prepare('SELECT COUNT(*) AS count FROM snapshot_state').get()).toMatchObject({ count: 0 })
   })
+
+  it('emits rollup query metrics during materialization when D1 omits metadata', async () => {
+    const { database, raw } = createMigrationBackedD1Database()
+    const logLines: string[] = []
+    const logger = {
+      info(message: string) { logLines.push(message) },
+      warn(message: string) { logLines.push(message) },
+      error(message: string) { logLines.push(message) },
+    }
+
+    const summary = await runScheduledChecks(
+      createEnv(database, [apiService()]),
+      downProbe,
+      new Date(base).toISOString(),
+      downProbe,
+      logger
+    )
+    const events = logLines.map((line) => JSON.parse(line) as Record<string, unknown>)
+    const historyMetrics = events.find((event) => event.event === 'scheduler.snapshot_history_query')
+
+    expect(summary.servicesChecked).toBe(1)
+    expect(historyMetrics?.durationMs).toEqual(expect.any(Number))
+    expect(raw.prepare("SELECT status FROM scheduler_runs WHERE status = 'succeeded'").get()).toBeTruthy()
+  })
 })
 
 describe('Public snapshot serving materialized data (real migrations)', () => {

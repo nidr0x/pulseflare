@@ -1,14 +1,15 @@
 import type { StatusConfig, StatusService } from '@pulseflare/schema'
 
-import { getWorkerDatabase } from '../config'
+import { getWorkerDatabase, getWorkerGitSha } from '../config'
 import { getRuntimeConfig } from '../install'
 import {
   getPublicServiceHistory,
   listPublicIncidents,
   listPublicServiceStatuses,
-  getLatestSchedulerRun,
+  getLatestCompletedSchedulerRun,
   readMaterializedSnapshotServices,
   type PublicServiceHistoryRecord,
+  type PublicHistoryQueryMetrics,
   type PublicServiceStatusRecord,
 } from '../repositories/d1'
 
@@ -77,7 +78,8 @@ function isStale(checkedAt: string | null | undefined, now: Date, staleAfterMinu
     return true
   }
 
-  return now.getTime() - Date.parse(checkedAt) > staleAfterMinutes * 60_000
+  const checkedAtMs = Date.parse(checkedAt)
+  return !Number.isFinite(checkedAtMs) || now.getTime() - checkedAtMs > staleAfterMinutes * 60_000
 }
 
 function buildSummaryPayload(
@@ -94,10 +96,10 @@ function buildSummaryPayload(
   const upCount = records.filter((record) => record.status === 'up').length
   const downCount = records.filter((record) => record.status === 'down').length
   const status: PublicSummaryStatus =
-    totalCount === 0 || records.length !== totalCount
-      ? 'unknown'
-      : downCount > 0
-        ? 'degraded'
+    downCount > 0
+      ? 'degraded'
+      : totalCount === 0 || records.length !== totalCount
+        ? 'unknown'
         : upCount === totalCount
           ? 'operational'
           : 'unknown'
@@ -231,11 +233,12 @@ async function getRuntimeServiceHistory(env: unknown, now: Date): Promise<Map<st
 export async function buildRuntimeServicesPayload(
   config: StatusConfig,
   database: D1Database,
-  now: Date
+  now: Date,
+  onHistoryQueryMetrics?: (metrics: PublicHistoryQueryMetrics) => void
 ): Promise<unknown[]> {
   const [statusRecords, history] = await Promise.all([
     listPublicServiceStatuses(database),
-    getPublicServiceHistory(database, now, HISTORY_WINDOW_DAYS),
+    getPublicServiceHistory(database, now, HISTORY_WINDOW_DAYS, onHistoryQueryMetrics),
   ])
   const statuses = new Map(statusRecords.map((record) => [record.id, record]))
   const staleAfterMinutes = config.staleAfterMinutes ?? DEFAULT_STALE_AFTER_MINUTES
@@ -272,15 +275,17 @@ function resolveMaterializedServices(
   now: Date
 ): { services: unknown[]; statuses: Map<string, PublicServiceStatusRecord> } | null {
   const byId = new Map<string, Record<string, unknown>>()
+  const configuredIds = new Set(config.services.map((service) => service.id))
 
   for (const entry of materializedServices) {
-    if (entry && typeof entry === 'object' && 'id' in entry) {
-      const id = (entry as { id: unknown }).id
-
-      if (typeof id === 'string') {
-        byId.set(id, entry as Record<string, unknown>)
-      }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry) || typeof (entry as { id?: unknown }).id !== 'string') {
+      return null
     }
+    const id = (entry as { id: string }).id
+    if (!configuredIds.has(id)) continue
+    if (!isMaterializedService(entry)) return null
+    if (byId.has(entry.id)) return null
+    byId.set(entry.id, entry)
   }
 
   if (!config.services.every((service) => byId.has(service.id))) {
@@ -323,14 +328,87 @@ function resolveMaterializedServices(
   return { services, statuses: resolvedStatuses }
 }
 
+function isMaterializedService(value: unknown): value is Record<string, unknown> & { id: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const service = value as Record<string, unknown>
+  const validStates = ['up', 'degraded', 'down', 'unknown']
+  const validPercent = (item: unknown) =>
+    item === null || (typeof item === 'number' && Number.isFinite(item) && item >= 0 && item <= 100)
+  const validLatency = (item: unknown) =>
+    item === null || (typeof item === 'number' && Number.isFinite(item) && item >= 0)
+  const validHistory = (item: unknown) =>
+    Array.isArray(item) && item.every((state) => validStates.includes(state as string))
+  const validHistoryDay = (item: unknown) => {
+    if (typeof item !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(item)) return false
+    const timestamp = Date.parse(`${item}T00:00:00.000Z`)
+    return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === item
+  }
+  const validLocation = (item: unknown) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false
+    const location = item as Record<string, unknown>
+    return (
+      typeof location.label === 'string' &&
+      validPercent(location.uptimePercentage) &&
+      validLatency(location.latencyMs) &&
+      validHistory(location.history)
+    )
+  }
+
+  return (
+    typeof service.id === 'string' && service.id.length > 0 &&
+    ['operational', 'degraded', 'outage', 'unknown'].includes(service.status as string) &&
+    validPercent(service.uptimePercentage) &&
+    validLatency(service.latencyMs) &&
+    validHistory(service.history) &&
+    Array.isArray(service.historyDays) &&
+    service.historyDays.every(validHistoryDay) &&
+    Array.isArray(service.locations) &&
+    service.locations.every(validLocation)
+  )
+}
+
 function isMaterializedSnapshotFresh(updatedAt: string, now: Date): boolean {
   const updatedAtMs = Date.parse(updatedAt)
   const ageMs = now.getTime() - updatedAtMs
-  return Number.isFinite(updatedAtMs) && ageMs >= 0 && ageMs <= MATERIALIZED_SNAPSHOT_MAX_AGE_MS
+  return (
+    Number.isFinite(updatedAtMs) &&
+    Number.isFinite(now.getTime()) &&
+    ageMs >= 0 &&
+    ageMs <= MATERIALIZED_SNAPSHOT_MAX_AGE_MS &&
+    new Date(updatedAtMs).toISOString().slice(0, 10) === now.toISOString().slice(0, 10)
+  )
+}
+
+async function resolveFreshMaterializedServices(
+  database: D1Database,
+  config: StatusConfig,
+  now: Date,
+  statuses?: Map<string, PublicServiceStatusRecord>
+) {
+  const materialized = await readMaterializedSnapshotServices(database)
+  if (!materialized || !isMaterializedSnapshotFresh(materialized.updatedAt, now)) return null
+
+  const currentStatuses =
+    statuses ??
+    new Map((await listPublicServiceStatuses(database)).map((record) => [record.id, record] as const))
+
+  return resolveMaterializedServices(
+    materialized.services,
+    config,
+    currentStatuses,
+    materialized.updatedAt,
+    now
+  )
 }
 
 export async function handlePublicServices(env: unknown, now = new Date()): Promise<Response> {
-  return publicJson({ services: await buildServicesPayload(env, now) })
+  const config = getRuntimeConfig(env)
+  const database = getWorkerDatabase(env)
+  const resolved = database
+    ? await resolveFreshMaterializedServices(database, config, now)
+    : null
+
+  return publicJson({ services: resolved?.services ?? (await buildServicesPayload(env, now)) })
 }
 
 function buildIncidentPayload(incidents: Awaited<ReturnType<typeof listPublicIncidents>>) {
@@ -435,23 +513,17 @@ export async function handlePublicSnapshot(env: unknown, now = new Date()): Prom
   // Prefer the scheduler-materialized services payload: it avoids rescanning
   // 90 days of rollups on every cold cache miss. The read happens before any
   // history query so a fresh row skips the heavy scan entirely.
-  const materialized = database ? await readMaterializedSnapshotServices(database) : null
-  const materializedFresh =
-    materialized !== null && isMaterializedSnapshotFresh(materialized.updatedAt, now)
-
   let services: unknown[]
   let summaryStatuses = statuses
 
-  if (database && materializedFresh) {
-    const resolved = resolveMaterializedServices(
-      materialized!.services,
-      config,
-      statuses,
-      materialized!.updatedAt,
-      now
-    )
-    services = resolved?.services ?? (await buildRuntimeServicesPayload(config, database, now))
-    summaryStatuses = resolved?.statuses ?? statuses
+  const resolved = database
+    ? await resolveFreshMaterializedServices(database, config, now, statuses)
+    : null
+  if (resolved) {
+    services = resolved.services
+    summaryStatuses = resolved.statuses
+  } else if (database) {
+    services = await buildRuntimeServicesPayload(config, database, now)
   } else {
     services = await buildServicesPayload(env, now)
   }
@@ -472,12 +544,14 @@ export async function handleHealth(env: unknown, now = new Date()): Promise<Resp
   // intermediaries are told never to cache it.
   const headers = { 'cache-control': 'no-store' }
   const database = getWorkerDatabase(env)
+  const gitSha = getWorkerGitSha(env)
+  const deployedRevision = gitSha ? { gitSha } : {}
 
   if (!database) {
-    return Response.json({ status: 'unknown', lastRun: null }, { status: 503, headers })
+    return Response.json({ status: 'unknown', lastRun: null, ...deployedRevision }, { status: 503, headers })
   }
 
-  const lastRun = await getLatestSchedulerRun(database)
+  const lastRun = await getLatestCompletedSchedulerRun(database)
   const staleAfterMinutes = getRuntimeConfig(env).staleAfterMinutes ?? DEFAULT_STALE_AFTER_MINUTES
   const healthy =
     lastRun?.status === 'succeeded' &&
@@ -487,6 +561,7 @@ export async function handleHealth(env: unknown, now = new Date()): Promise<Resp
   return Response.json(
     {
       status: healthy ? 'ok' : 'degraded',
+      ...deployedRevision,
       lastRun: lastRun
         ? {
             id: lastRun.id,

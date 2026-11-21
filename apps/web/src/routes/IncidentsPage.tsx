@@ -63,7 +63,7 @@ export function IncidentsPage({ data: suppliedData, snapshot, loadState = 'ready
         selectedService={selectedService}
         loadState={loadState}
         onRetry={onRetry}
-        title="Full incident history"
+        title="Recent incident history"
         eyebrow="Activity"
       />
     </div>

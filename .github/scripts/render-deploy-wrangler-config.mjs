@@ -9,20 +9,7 @@ function replaceSingle(source, pattern, replacement, label) {
   return source.replace(pattern, replacement)
 }
 
-function addRemoteProbeUrl(config, remoteProbeUrl) {
-  if (!remoteProbeUrl) {
-    return config
-  }
-
-  try {
-    if (new URL(remoteProbeUrl).protocol !== 'https:') {
-      throw new Error()
-    }
-  } catch {
-    throw new Error('remoteProbeUrl must be a valid HTTPS URL')
-  }
-
-  const variable = `PULSEFLARE_REMOTE_PROBE_URL = ${JSON.stringify(remoteProbeUrl)}`
+function addVariable(config, variable) {
   const lines = config.trimEnd().split(/\r?\n/)
   const varsIndex = lines.findIndex((line) => line.trim() === '[vars]')
 
@@ -38,6 +25,18 @@ function addRemoteProbeUrl(config, remoteProbeUrl) {
   return `${lines.join('\n')}\n`
 }
 
+function addRemoteProbeUrl(config, remoteProbeUrl) {
+  if (!remoteProbeUrl) return config
+
+  try {
+    if (new URL(remoteProbeUrl).protocol !== 'https:') throw new Error()
+  } catch {
+    throw new Error('remoteProbeUrl must be a valid HTTPS URL')
+  }
+
+  return addVariable(config, `PULSEFLARE_REMOTE_PROBE_URL = ${JSON.stringify(remoteProbeUrl)}`)
+}
+
 export function renderDeployWranglerConfig({
   sourcePath = 'apps/worker/wrangler.toml',
   outputPath = 'apps/worker/wrangler.deploy.toml',
@@ -46,6 +45,7 @@ export function renderDeployWranglerConfig({
   databaseId,
   checkCron = '* * * * *',
   remoteProbeUrl,
+  gitSha,
 } = {}) {
   if (!workerName || !databaseName || !databaseId) {
     throw new Error('workerName, databaseName, and databaseId are required')
@@ -58,6 +58,7 @@ export function renderDeployWranglerConfig({
   config = replaceSingle(config, /^database_id = ".*"$/m, `database_id = "${databaseId}"`, 'D1 database id')
   config = replaceSingle(config, /^crons = \[".*"\]$/m, `crons = ["${checkCron}"]`, 'cron trigger')
   config = addRemoteProbeUrl(config, remoteProbeUrl)
+  if (gitSha) config = addVariable(config, `PULSEFLARE_GIT_SHA = ${JSON.stringify(gitSha)}`)
 
   writeFileSync(outputPath, config)
 
@@ -71,5 +72,6 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     databaseId: process.env.PULSEFLARE_D1_ID_RENDERED,
     checkCron: process.env.PULSEFLARE_CHECK_CRON_RENDERED || '* * * * *',
     remoteProbeUrl: process.env.PULSEFLARE_REMOTE_PROBE_URL_RENDERED,
+    gitSha: process.env.PULSEFLARE_GIT_SHA_RENDERED,
   })
 }

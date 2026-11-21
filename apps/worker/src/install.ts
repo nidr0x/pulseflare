@@ -113,7 +113,13 @@ CREATE INDEX IF NOT EXISTS notification_outbox_pending_idx ON notification_outbo
 CREATE INDEX IF NOT EXISTS notification_outbox_claim_idx
   ON notification_outbox(status, next_attempt_at, claimed_until);
 CREATE INDEX IF NOT EXISTS scheduler_runs_started_idx ON scheduler_runs(started_at);
+CREATE INDEX IF NOT EXISTS scheduler_runs_completed_finished_idx
+  ON scheduler_runs(finished_at DESC)
+  WHERE status IN ('succeeded', 'failed');
 CREATE INDEX IF NOT EXISTS daily_check_rollups_day_idx ON daily_check_rollups(day);
+CREATE INDEX IF NOT EXISTS incidents_resolved_order_idx
+  ON incidents(resolved_at DESC, id DESC)
+  WHERE status = 'resolved';
 CREATE UNIQUE INDEX IF NOT EXISTS incidents_one_open_per_service_idx
   ON incidents(service_id)
   WHERE status = 'open';

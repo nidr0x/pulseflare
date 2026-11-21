@@ -125,6 +125,8 @@ Later migrations add:
 
 Public summaries and incident history remain queryable without a single serialized state blob. Daily rollups power aggregate history; the aggregate service history ships the full retention window, while per-location records ship only their latest bucket because the UI renders one state per location. Raw failure details and completed notification jobs are pruned according to configured retention, with cleanup scheduled at most once per day. Public latency is the median across reporting probe locations.
 
+Public incident history includes every open incident for an active service and the 50 most recently resolved incidents. Partial indexes support the scheduler health and resolved-incident queries. Snapshot materialization logs the duration of its full-window rollup query and D1 `rows_read` when available; missing D1 metadata does not affect the run.
+
 ## Project constraints
 
 - Worker logic owns status data.

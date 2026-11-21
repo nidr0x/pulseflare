@@ -18,13 +18,25 @@ const INCIDENTS_PAYLOAD = {
   maintenance: [],
 }
 
+const EXPECTED_SHA = 'abc123'
+const ROOT_HTML = '<!doctype html><script type="module" src="/assets/app.js"></script>'
+
 function smokeFetcher(payloads) {
-  return async (input) => {
+  return async (input, init) => {
     const url = String(input)
+
+    if (url.endsWith('/')) {
+      return new Response(ROOT_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+    }
+
+    if (url.endsWith('/assets/app.js')) {
+      assert.equal(init?.method, 'HEAD')
+      return new Response(null, { headers: { 'content-type': 'text/javascript; charset=utf-8' } })
+    }
 
     for (const [suffix, payload] of payloads) {
       if (url.endsWith(suffix)) {
-        return Response.json(payload)
+        return Response.json(suffix === '/api/health' ? { ...payload, gitSha: EXPECTED_SHA } : payload)
       }
     }
 
@@ -33,18 +45,28 @@ function smokeFetcher(payloads) {
 }
 
 describe('runSmokeChecks', () => {
-  it('checks health, the public snapshot, and the incidents view after deployment', async () => {
+  it('checks the expected revision, public APIs, root HTML, and its JavaScript asset', async () => {
     const calls = []
 
     await runSmokeChecks({
       baseUrl: 'https://status.example.com',
+      expectedSha: EXPECTED_SHA,
       maxAttempts: 1,
-      fetcher: async (input) => {
+      fetcher: async (input, init) => {
         const url = String(input)
         calls.push(url)
 
         if (url.endsWith('/api/health')) {
-          return Response.json({ status: 'ok', lastRun: { status: 'succeeded' } })
+          return Response.json({ status: 'ok', gitSha: EXPECTED_SHA, lastRun: { status: 'succeeded' } })
+        }
+
+        if (url.endsWith('/')) {
+          return new Response(ROOT_HTML, { headers: { 'content-type': 'text/html' } })
+        }
+
+        if (url.endsWith('/assets/app.js')) {
+          assert.equal(init?.method, 'HEAD')
+          return new Response(null, { headers: { 'content-type': 'text/javascript' } })
         }
 
         if (url.endsWith('/api/public/snapshot')) {
@@ -61,6 +83,8 @@ describe('runSmokeChecks', () => {
 
     assert.deepEqual(calls, [
       'https://status.example.com/api/health',
+      'https://status.example.com/',
+      'https://status.example.com/assets/app.js',
       'https://status.example.com/api/public/snapshot',
       'https://status.example.com/api/public/incidents',
     ])
@@ -70,6 +94,7 @@ describe('runSmokeChecks', () => {
     await assert.rejects(
       runSmokeChecks({
         baseUrl: 'https://status.example.com',
+        expectedSha: EXPECTED_SHA,
         maxAttempts: 2,
         retryDelayMs: 0,
         fetcher: async () => Response.json({ status: 'degraded' }, { status: 503 }),
@@ -82,6 +107,7 @@ describe('runSmokeChecks', () => {
     await assert.rejects(
       runSmokeChecks({
         baseUrl: 'https://status.example.com',
+        expectedSha: EXPECTED_SHA,
         maxAttempts: 1,
         fetcher: smokeFetcher([
           ['/api/health', { status: 'ok' }],
@@ -97,6 +123,7 @@ describe('runSmokeChecks', () => {
     await assert.rejects(
       runSmokeChecks({
         baseUrl: 'https://status.example.com',
+        expectedSha: EXPECTED_SHA,
         maxAttempts: 1,
         fetcher: smokeFetcher([
           ['/api/health', { status: 'ok' }],
@@ -105,6 +132,35 @@ describe('runSmokeChecks', () => {
         ]),
       }),
       /Incidents view returned an invalid payload/
+    )
+  })
+
+  it('fails when health reports a different deployed SHA', async () => {
+    await assert.rejects(
+      runSmokeChecks({
+        baseUrl: 'https://status.example.com',
+        expectedSha: EXPECTED_SHA,
+        maxAttempts: 1,
+        fetcher: async () => Response.json({ status: 'ok', gitSha: 'old-sha' }),
+      }),
+      /expected SHA abc123/
+    )
+  })
+
+  it('fails when the referenced JavaScript asset is missing', async () => {
+    await assert.rejects(
+      runSmokeChecks({
+        baseUrl: 'https://status.example.com',
+        expectedSha: EXPECTED_SHA,
+        maxAttempts: 1,
+        fetcher: async (input) => {
+          const url = String(input)
+          if (url.endsWith('/api/health')) return Response.json({ status: 'ok', gitSha: EXPECTED_SHA })
+          if (url.endsWith('/')) return new Response(ROOT_HTML, { headers: { 'content-type': 'text/html' } })
+          return new Response(null, { status: 404 })
+        },
+      }),
+      /JavaScript asset returned HTTP 404/
     )
   })
 })

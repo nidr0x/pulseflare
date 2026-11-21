@@ -621,7 +621,9 @@ async function materializeSnapshotServices(
   logger: ObservabilityLogger
 ): Promise<void> {
   try {
-    const services = await buildRuntimeServicesPayload(config, database, new Date(checkedAt))
+    const services = await buildRuntimeServicesPayload(config, database, new Date(checkedAt), (metrics) => {
+      emitObservabilityEvent('info', 'scheduler.snapshot_history_query', { runId, ...metrics }, logger)
+    })
     await writeMaterializedSnapshotServices(database, checkedAt, services)
   } catch (error) {
     // Materialization must never fail the run itself; the public snapshot

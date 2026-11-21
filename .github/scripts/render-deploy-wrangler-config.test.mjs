@@ -36,6 +36,7 @@ describe('renderDeployWranglerConfig', () => {
       databaseId: '11111111-1111-1111-1111-111111111111',
       checkCron: '*/5 * * * *',
       remoteProbeUrl: 'https://probes.example.com/run',
+      gitSha: 'abc123',
     })
 
     const rendered = readFileSync(outputPath, 'utf8')
@@ -45,6 +46,7 @@ describe('renderDeployWranglerConfig', () => {
     assert.match(rendered, /database_id = "11111111-1111-1111-1111-111111111111"/)
     assert.match(rendered, /crons = \["\*\/5 \* \* \* \*"\]/)
     assert.match(rendered, /\[vars\]\nPULSEFLARE_REMOTE_PROBE_URL = "https:\/\/probes\.example\.com\/run"/)
+    assert.match(rendered, /PULSEFLARE_GIT_SHA = "abc123"/)
   })
 
   it('rejects a non-HTTPS remote probe URL', () => {

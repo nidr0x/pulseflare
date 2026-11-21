@@ -6,6 +6,7 @@ export type WorkerEnv = Partial<Env> & {
     fetch(request: Request): Promise<Response>
   }
   PULSEFLARE_BOOTSTRAP_TOKEN?: string
+  PULSEFLARE_GIT_SHA?: string
   PULSEFLARE_REMOTE_PROBE_URL?: string
   PULSEFLARE_REMOTE_PROBE_TOKEN?: string
   STATUS_CONFIG?: StatusConfig
@@ -63,6 +64,15 @@ export function getRemoteProbeUrl(env: unknown): string | undefined {
 
   const { PULSEFLARE_REMOTE_PROBE_URL } = env as WorkerEnv
   return PULSEFLARE_REMOTE_PROBE_URL
+}
+
+export function getWorkerGitSha(env: unknown): string | undefined {
+  if (!env || typeof env !== 'object') {
+    return undefined
+  }
+
+  const { PULSEFLARE_GIT_SHA } = env as WorkerEnv
+  return typeof PULSEFLARE_GIT_SHA === 'string' ? PULSEFLARE_GIT_SHA : undefined
 }
 
 export function getRemoteProbeToken(env: unknown): string | undefined {
