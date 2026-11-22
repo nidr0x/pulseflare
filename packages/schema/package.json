@@ -9,6 +9,6 @@
     "lint": "tsc -p ../../config/tsconfig.json --pretty false"
   },
   "devDependencies": {
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   }
 }
